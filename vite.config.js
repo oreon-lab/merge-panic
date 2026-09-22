@@ -15,6 +15,6 @@ export default defineConfig({
     strictPort: true,
     host: true,
     // libera túneis ngrok (qualquer subdomínio)
-    allowedHosts: ['.ngrok-free.app', '.ngrok.app', '.ngrok.io'],
+    allowedHosts: ['.ngrok-free.app', '.ngrok.app', '.ngrok.io', '.vercel.app', '.hyzecloud.app'],
   },
 });
