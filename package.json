@@ -1,0 +1,19 @@
+{
+  "name": "merge-panic",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "vite build && node server/prod.js"
+  },
+  "dependencies": {
+    "three": "^0.170.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
