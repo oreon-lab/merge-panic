@@ -7,6 +7,7 @@ import { Game } from './game.js';
 import { LEVELS } from './levels.js';
 import { sfx } from './audio.js';
 import { Net } from './net.js';
+import { save } from './save.js';
 import { installDebug } from './debug.js';
 
 const SNAP_RATE = 1 / 20;  // host → clientes
@@ -49,6 +50,7 @@ class App {
     this.levelIndex = 0;
     this.roster = []; // [{ owner, device }]
     this.screen = 'title';
+    sfx.muted = save.muted;
     this.newGame();
     this.goto('title');
 
@@ -99,7 +101,7 @@ class App {
     document.getElementById('ui').classList.toggle('menu-bg', screen !== 'session');
     if (screen === 'title') {
       if (!g.bots) g.startDemo();
-      this.screens.title({ muted: sfx.muted });
+      this.showTitle();
     } else if (screen === 'online') {
       if (!g.bots) g.startDemo();
       this.screens.online(this.onlineState);
@@ -119,7 +121,7 @@ class App {
       if (a === 'local') { this.role = 'local'; this.roster = []; this.newGame(); this.goto('session'); }
       if (a === 'online') { this.onlineState = {}; this.goto('online'); }
       if (a === 'howto') { this.returnTo = 'title'; this.goto('howto'); }
-      if (a === 'sound') { this.toggleMute(); this.screens.title({ muted: sfx.muted }); this.screens.focus(3, false); }
+      if (a === 'sound') { this.toggleMute(); this.showTitle(); this.screens.focus(3, false); }
     } else if (s === 'online') {
       if (a === 'back') this.goto('title');
       if (a === 'create' && !this.onlineState.busy) this.createRoom();
@@ -162,8 +164,13 @@ class App {
     g.start();
   }
 
+  showTitle() {
+    this.screens.title({ muted: sfx.muted, best: save.best, stars: save.stars, games: save.games, bestCombo: save.bestCombo });
+  }
+
   toggleMute() {
     sfx.muted = !sfx.muted;
+    save.muted = sfx.muted;
     this.ui.toast(sfx.muted ? '🔇 Som desligado' : '🔊 Som ligado', 1200);
   }
 

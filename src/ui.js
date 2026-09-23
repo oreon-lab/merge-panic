@@ -23,9 +23,20 @@ export class UI {
     this.orders = h('div', 'orders'); this.hud.append(this.orders);
     this.stats = h('div', 'stats', `
       <div class="clock"><span class="ic">⏱️</span><span class="v">5:00</span></div>
-      <div class="score"><span class="lbl">PONTOS</span><span class="v">0</span></div>
+      <div class="score">
+        <div class="s-row"><span class="lbl">PONTOS</span><span class="v">0</span></div>
+        <div class="goal"><div class="gbar"><i class="gfill"></i></div><div class="gmk"></div></div>
+      </div>
+      <div class="combo hidden"><span class="cx">x2</span><div class="ct"><i></i></div></div>
       <div class="deliv"><span class="lbl">ENTREGUES</span><span class="v">0/20</span></div>`);
     this.hud.append(this.stats);
+    this.clockEl = this.stats.querySelector('.clock');
+    this.scoreEl = this.stats.querySelector('.score .v');
+    this.delivEl = this.stats.querySelector('.deliv .v');
+    this.goal = { fill: this.stats.querySelector('.gfill'), mk: this.stats.querySelector('.gmk') };
+    this.comboEl = this.stats.querySelector('.combo');
+    this.comboX = this.stats.querySelector('.combo .cx');
+    this.comboBar = this.stats.querySelector('.combo .ct i');
     this.toastEl = h('div', 'toast'); this.root.append(this.toastEl);
     this.bannerEl = h('div', 'banner'); this.root.append(this.bannerEl);
     this.bigEl = h('div', 'bigcount'); this.root.append(this.bigEl);
@@ -212,12 +223,40 @@ export class UI {
     }
   }
 
-  setStats(time, score, delivered, max) {
-    const clock = this.stats.querySelector('.clock');
-    clock.querySelector('.v').textContent = fmtTime(time);
-    clock.classList.toggle('low', time <= 30);
-    this.stats.querySelector('.score .v').textContent = score;
-    this.stats.querySelector('.deliv .v').textContent = `${delivered}/${max}`;
+  // stars = limiares do nível; combo = { mult, t, window } da sequência atual
+  setStats(time, score, delivered, max, stars = [], combo = null) {
+    this.clockEl.querySelector('.v').textContent = fmtTime(time);
+    this.clockEl.classList.toggle('low', time <= 30);
+    if (this.scoreEl.textContent !== String(score)) {
+      this.scoreEl.textContent = score;
+      this.scoreEl.classList.remove('bump');
+      void this.scoreEl.offsetWidth;
+      this.scoreEl.classList.add('bump');
+    }
+    this.delivEl.textContent = `${delivered}/${max}`;
+
+    const top = stars[stars.length - 1] || 1;
+    const key = stars.join(',');
+    if (this.goal.mk.dataset.stars !== key) {
+      this.goal.mk.dataset.stars = key;
+      this.goal.mk.innerHTML = stars.map((s) => `<i style="--p:${(s / top) * 100}%">★</i>`).join('');
+    }
+    this.goal.fill.style.width = `${Math.min(100, (score / top) * 100)}%`;
+    [...this.goal.mk.children].forEach((el, i) => {
+      const on = score >= stars[i];
+      if (on && !el.classList.contains('on')) {
+        el.classList.add('on', 'pop');
+        setTimeout(() => el.classList.remove('pop'), 500);
+      } else if (!on) el.classList.remove('on');
+    });
+
+    const hot = combo && combo.mult > 1;
+    this.comboEl.classList.toggle('hidden', !hot);
+    if (hot) {
+      this.comboEl.dataset.mult = combo.mult;
+      this.comboX.textContent = `x${combo.mult}`;
+      this.comboBar.style.width = `${Math.max(0, Math.min(100, (combo.t / combo.window) * 100))}%`;
+    }
   }
 
   showHud(v) { this.hud.classList.toggle('hidden', !v); }

@@ -38,6 +38,10 @@ No lobby, cada jogador aperta **Pegar** para entrar. **Espaço/Start** começa a
 3. Leve aos **🧪 Testes** (automático).
 4. Features e projetos passam por **👀 Code Review** — ninguém revisa o próprio código.
 5. Entregue no **🔀 Merge** antes do prazo. Entregas rápidas dão gorjeta; tickets tocados por 2+ devs dão bônus de equipe.
+6. **🔥 Combo**: entregas em sequência multiplicam tudo — x1.5 → x2 → x2.5 → x3. Deixar um prazo estourar (ou jogar um ticket no lixo) esfria a sequência, e ficar 16 s sem entregar apaga a chama.
+7. **⭐ Estrelas**: a barrinha abaixo dos pontos mostra os três limites da sprint (**800 / 1700 / 2500**). Cruzar um deles avisa na hora, então dá pra sentir o "quase lá".
+
+O recorde, as estrelas acumuladas e o som ficam salvos no navegador (`localStorage`). A tela de título mostra seu melhor resultado.
 
 ## Caos (o que pode dar errado)
 
@@ -63,5 +67,6 @@ Dev sozinho às vezes deixa bug; **pair programming nunca deixa**.
 - `src/player.js` — movimento, colisão e animações
 - `src/ui.js` / `src/style.css` — HUD, cards de pedidos, telas
 - `src/net.js` — cliente WebSocket (criar/entrar em sala)
+- `src/save.js` — persistência local (recorde, estrelas, som)
 - `server/relay.js` — relay de salas (plugin do Vite em dev; `server/prod.js` em produção)
 - `src/input.js`, `src/audio.js`, `src/fx.js`, `src/debug.js`

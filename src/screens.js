@@ -80,7 +80,15 @@ export class Screens {
   }
 
   // ---------------------------------------------------------------
-  title({ muted }) {
+  title({ muted, best = 0, stars = 0, games = 0, bestCombo = 0 }) {
+    const rec = best > 0
+      ? `<div class="record">
+          <span>🏆 <b>${best}</b> pts</span>
+          <span>⭐ <b>${stars}</b> estrelas</span>
+          ${bestCombo >= 2 ? `<span>🔥 <b>${bestCombo}</b> seguidas</span>` : ''}
+          <span>🎮 ${games} sprint${games === 1 ? '' : 's'}</span>
+        </div>`
+      : '';
     this.show('title', `
       <div class="title-wrap">
         <div class="logo-big">
@@ -88,6 +96,7 @@ export class Screens {
           <div class="lg2">${letters('PANIC', 'lt')}</div>
         </div>
         <div class="tagline">Overcooked de devs · co-op caótico para até 4 jogadores</div>
+        ${rec}
         <div class="menu">
           <button class="mbtn" data-nav="local"><i>🎮</i><span><b>Jogar local</b><small>Mesmo PC · teclado e controles</small></span></button>
           <button class="mbtn" data-nav="online"><i>🌐</i><span><b>Jogar online</b><small>Crie uma sala e chame a galera</small></span></button>
@@ -166,6 +175,8 @@ export class Screens {
               <li>👯 <b>Pair programming</b>: 2 devs na mesma mesa = mais rápido e <b>sem bugs</b>.</li>
               <li>🙅 Ninguém revisa o próprio código. Combinem quem revisa!</li>
               <li>⏱️ Entregar rápido dá gorjeta. Tocar em equipe dá bônus 🤝.</li>
+              <li>🔥 <b>Combo</b>: entregue em sequência e os pontos multiplicam até <b>x3</b>. Deixar um prazo estourar esfria tudo.</li>
+              <li>⭐ As estrelas aparecem na barrinha de pontos — dá pra ver o próximo marco durante a sprint.</li>
               <li>☕ Café deixa você mais rápido por alguns segundos.</li>
               <li>🗑️ Won't fix descarta um ticket impossível (com penalidade).</li>
             </ul>
@@ -266,7 +277,9 @@ export class Screens {
         <div class="r-head">${r.headline}</div>
         <div class="stars2">${stars}</div>
         <div class="r-score"><span class="count">0</span><small>pontos</small></div>
-        <div class="r-line"><span>✅ ${r.delivered} entregues</span><span>❌ ${r.failed} perdidos</span><span>🗑️ ${r.trashed} won't fix</span></div>
+        ${r.record ? `<div class="r-rec new">🏆 NOVO RECORDE!<small>${r.best > 0 ? `superou os ${r.best} pts anteriores` : 'primeira sprint registrada'}</small></div>`
+          : r.best > 0 ? `<div class="r-rec">🏆 Recorde: ${r.best} pts<small>faltaram ${Math.max(0, r.best - r.score)} pra bater</small></div>` : ''}
+        <div class="r-line"><span>✅ ${r.delivered} entregues</span><span>❌ ${r.failed} perdidos</span><span>🗑️ ${r.trashed} won't fix</span>${r.combo >= 2 ? `<span>🔥 ${r.combo} seguidas</span>` : ''}</div>
         <div class="r-cards">${cards}</div>
         ${buttons}
       </div>`);
@@ -277,7 +290,10 @@ export class Screens {
       const k = Math.min(1, (performance.now() - start) / dur);
       el.textContent = Math.round(r.score * (1 - Math.pow(1 - k, 3)));
       if (k < 1 && Math.random() < 0.5) sfx.play('count');
-      if (k >= 1) clearInterval(this.countTimer);
+      if (k >= 1) {
+        clearInterval(this.countTimer);
+        if (r.record) sfx.play('combo', 3);
+      }
     }, 40);
     [1, 2, 3].forEach((i) => { if (r.stars >= i) setTimeout(() => sfx.play('star'), (0.5 + i * 0.35) * 1000); });
   }

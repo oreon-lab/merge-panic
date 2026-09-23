@@ -12,7 +12,10 @@ export const LEVELS = [
     maxActive: 4,
     spawnEvery: [13, 19],
     types: { bug: 0.45, feature: 0.42, project: 0.13 },
-    stars: [120, 260, 420],
+    // Limites derivados da distribuição real de pontos (combo incluído):
+    // 800 = p10 de uma sprint ruim (1★ quase garantido), 1700 = p10 de quem
+    // encadeia bem, 2500 = p10 de quem sustenta o combo de ponta a ponta.
+    stars: [800, 1700, 2500],
     // caos
     aiSpeed: 0.45,          // IA leva 45% do tempo de um humano
     aiBugChance: 0.35,

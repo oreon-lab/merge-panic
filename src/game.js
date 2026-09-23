@@ -6,6 +6,7 @@ import { FX } from './fx.js';
 import { aiFace, buildTicketMesh } from './models.js';
 import { PLAYER_LOOKS } from './player.js';
 import { sfx } from './audio.js';
+import { save } from './save.js';
 
 const TIP_MAX = 0.5;      // gorjeta máxima: +50% dos pontos se entregar rápido
 const EXPIRE_PENALTY = 10;
@@ -15,6 +16,10 @@ const REPAIR_TIME = 2;    // segurar "usar" para reiniciar IA/roteador
 const CONFLICT_TIME = 2.5;
 const DRAIN_EVERY = 3;    // incidente em produção: perde pontos a cada N s
 const DRAIN_POINTS = 3;
+// combo: entregar em sequência (sem prazo estourar) multiplica os pontos
+const COMBO_WINDOW = 16;  // segundos para manter a chama acesa
+const COMBO_TIERS = [1, 1, 1.5, 2, 2.5, 3];  // índice = nº de entregas seguidas
+const comboMult = (n) => COMBO_TIERS[Math.min(n, COMBO_TIERS.length - 1)];
 const r2 = (v) => Math.round(v * 100) / 100;
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -49,6 +54,11 @@ export class Game {
     this.delivered = 0;
     this.failed = 0;
     this.trashed = 0;
+    this.combo = 0;         // entregas seguidas sem perder um prazo
+    this.comboBest = 0;
+    this.comboT = 0;        // segundos restantes da janela de combo
+    this.starsHit = 0;      // estrelas já celebradas nesta sprint
+    this.ended = false;
     this.countdown = 0;
     this.msgCd = new Map();
     this.outbox = [];
@@ -98,7 +108,7 @@ export class Game {
   runEvent(type, d) {
     const v = (d) => new THREE.Vector3(d.x || 0, d.y || 0, d.z || 0);
     switch (type) {
-      case 'sfx': sfx.play(d.n); break;
+      case 'sfx': sfx.play(d.n, d.a); break;
       case 'float': this.ui.floatText(d.text, v(d), d.c, d.big); break;
       case 'toast': this.ui.toast(d.html, d.ms); break;
       case 'banner': this.ui.banner(d.text, d.sub, d.ms); break;
@@ -115,18 +125,22 @@ export class Game {
         sfx.play('join'); this.fx.puff(p.pos, 10, p.color); p.celebrate();
         break;
       }
-      case 'results':
+      case 'results': {
+        if (this.ended) break;
+        this.ended = true;
         this.mode = 'results';
         sfx.play('end');
         this.ui.showHud(false);
         this.ui.setAlarm(false);
-        this.results = d;
+        const rec = save.run({ score: d.score, stars: d.stars, delivered: d.delivered, failed: d.failed, combo: d.combo });
+        this.results = { ...d, best: rec.prev, record: rec.isRecord };
         this.fx.confetti(new THREE.Vector3(), d.stars * 40);
         break;
+      }
     }
   }
 
-  sound(n) { this.emit('sfx', { n }); }
+  sound(n, a = 0) { this.emit('sfx', a ? { n, a } : { n }); }
   floatAt(text, pos, c = '#fff', big = false) { this.emit('float', { text, x: r2(pos.x), y: r2(pos.y), z: r2(pos.z), c, big }); }
   toast(html, ms) { this.emit('toast', { html, ms }); }
 
@@ -154,7 +168,7 @@ export class Game {
   enterMatchUI() {
     this.ui.showHud(true);
     this.app.resize();
-    this.ui.setStats(this.timeLeft, this.score, this.delivered, this.level.maxOrders);
+    this.hudStats();
   }
 
   // ---------- ciclo principal ----------
@@ -210,8 +224,10 @@ export class Game {
       for (const [st, ps] of workers) this.work(st, ps, dt);
       this.updateStations(dt);
       this.updateOrders(dt);
+      this.updateCombo(dt);
       this.updateEvents(dt);
       this.timeLeft -= dt;
+      this.checkStars();
       const sec = Math.ceil(this.timeLeft);
       if (sec <= 10 && sec > 0 && sec !== this.lastSec) {
         this.lastSec = sec;
@@ -242,9 +258,15 @@ export class Game {
     p.update(dt, move, s.dash, this.world, this.fx, () => sfx.play('dash'));
   }
 
+  hudStats() {
+    this.ui.setStats(this.timeLeft, this.score, this.delivered, this.level.maxOrders, this.level.stars, {
+      mult: comboMult(this.combo), t: this.comboT, window: COMBO_WINDOW,
+    });
+  }
+
   updateUI(dt = 0) {
     if (this.mode !== 'lobby') {
-      this.ui.setStats(this.timeLeft, this.score, this.delivered, this.level.maxOrders);
+      this.hudStats();
       this.ui.syncOrders(this.tickets, this.players);
     }
     this.ui.updateWorld(this.tickets);
@@ -669,7 +691,12 @@ export class Game {
     const base = t.def.points;
     const tip = Math.round(base * TIP_MAX * (t.timeLeft / t.timeLimit));
     const team = this.multi && t.touchers.size >= 2 ? TEAM_BONUS : 0;
-    const gain = base + tip + team;
+    const prevMult = comboMult(this.combo);
+    this.combo++;
+    this.comboBest = Math.max(this.comboBest, this.combo);
+    this.comboT = COMBO_WINDOW;
+    const mult = comboMult(this.combo);
+    const gain = Math.round((base + tip + team) * mult);
     this.score += gain;
     this.delivered++;
     this.lastMergeAt = this.elapsed;
@@ -682,7 +709,13 @@ export class Game {
     this.sound('deliver');
     this.floatAt(`+${gain}${team ? ' 🤝' : ''}`, st.pos, '#6ee7a0', true);
     if (team) this.toast(`🤝 Trabalho em equipe! <b>+${TEAM_BONUS}</b> — ${t.touchers.size} devs no ticket "${t.name}"`);
-    this.emit('confetti', { x: st.pos.x, z: st.pos.z, n: 40 });
+    this.emit('confetti', { x: st.pos.x, z: st.pos.z, n: Math.min(90, 40 + (mult - 1) * 24) });
+    if (mult > prevMult) {
+      // subiu de faixa: fanfarra mais aguda, tremida leve e o número acima do +N
+      this.sound('combo', mult);
+      this.emit('shake', { a: 0.12 });
+      this.floatAt(`🔥 COMBO x${mult}!`, st.pos.clone().add(new THREE.Vector3(0, 1, 0)), '#ffb703', true);
+    }
     // bug escondido chega em produção daqui a pouco...
     if (t.escaped) this.pendingProd.push({ at: this.elapsed + rand(8, 20), name: t.name });
     this.endTicket(t, 'done');
@@ -695,6 +728,7 @@ export class Game {
     this.score = Math.max(0, this.score - penalty);
     this.sound('fail');
     this.floatAt(`🗑️ Won't fix! -${penalty}`, st.pos, '#ff8fa3');
+    this.breakCombo(st.pos, '🗑️ Combo quebrado');
     this.endTicket(t, 'failed');
   }
 
@@ -733,6 +767,35 @@ export class Game {
     }
   }
 
+  // ---------- combo e metas ----------
+  updateCombo(dt) {
+    if (this.combo <= 0) return;
+    this.comboT -= dt;
+    if (this.comboT > 0) return;
+    this.breakCombo(null, '💤 Combo esfriou');
+  }
+
+  // Perder um prazo mata a sequência: correr atrás do ticket seguinte tem custo.
+  breakCombo(pos, why = '💔 Combo quebrado') {
+    const had = comboMult(this.combo);
+    this.combo = 0;
+    this.comboT = 0;
+    if (had <= 1) return; // nem tinha começado a esquentar
+    this.sound('combocool');
+    const at = pos || this.station('merge')?.pos;
+    if (at) this.floatAt(`${why} — era x${had}`, at.clone().add(new THREE.Vector3(0, 0.8, 0)), '#9aa3b5');
+  }
+
+  checkStars() {
+    const n = this.level.stars.filter((s) => this.score >= s).length;
+    if (n <= this.starsHit) { this.starsHit = n; return; }
+    this.starsHit = n;
+    this.sound('star');
+    this.emit('banner', { text: `⭐ ${n}ª estrela`, sub: `${this.score} pontos — dá pra mais!`, ms: 1400 });
+    const st = this.station('merge');
+    if (st) this.emit('confetti', { x: st.pos.x, z: st.pos.z, n: 26 });
+  }
+
   spawnOrder() {
     const w = this.level.types;
     let r = Math.random() * Object.values(w).reduce((a, b) => a + b, 0);
@@ -757,6 +820,7 @@ export class Game {
     if (h?.kind === 'station') { h.ref.item = null; h.ref.conflict = null; }
     if (pos) this.floatAt(`⏰ Prazo estourado! -${penalty}`, pos, '#ff8fa3');
     this.toast(`😱 O cliente desistiu de <b>"${t.name}"</b>`);
+    this.breakCombo(pos, '⏰ Combo quebrado');
     this.endTicket(t, 'failed');
   }
 
@@ -913,6 +977,7 @@ export class Game {
     };
     this.emit('results', {
       headline: headlines[stars], stars, score: this.score, delivered: this.delivered, failed: this.failed, trashed: this.trashed,
+      combo: this.comboBest,
       players: this.players.map((p) => ({ name: p.look.name, color: p.color, stats: p.stats, title: titles(p) })),
     });
   }
@@ -928,6 +993,7 @@ export class Game {
     const snap = {
       t: 'snap',
       m: this.mode, tl: r2(this.timeLeft), sc: this.score, dv: this.delivered,
+      cb: this.combo, ct: r2(this.comboT),
       wf: this.wifiDown ? 1 : 0, ic: this.incident,
       p: this.players.map((p) => [r2(p.pos.x), r2(p.pos.z), r2(p.angle), r2(p.vel.x), r2(p.vel.z), p.working ? 1 : 0, p.holding?.id || 0, p.boost > 0 ? 1 : 0, r2(p.meeting)]),
       k: live.map((t) => [t.id, t.type, t.name, t.stepIndex, r2(t.progress), r2(t.timeLeft), t.state,
@@ -949,6 +1015,7 @@ export class Game {
       this.onModeChange(from, s.m);
     }
     this.timeLeft = s.tl; this.score = s.sc; this.delivered = s.dv;
+    this.combo = s.cb || 0; this.comboT = s.ct || 0;
     this.wifiDown = !!s.wf; this.incident = s.ic || 0;
 
     // tickets

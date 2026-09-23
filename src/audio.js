@@ -36,7 +36,7 @@ class Sfx {
     src.connect(f).connect(g).connect(this.master);
     src.start();
   }
-  play(name) {
+  play(name, a = 0) {
     switch (name) {
       case 'pick': this.tone(520, 0.07, 'triangle', 0.3, 200); break;
       case 'place': this.tone(380, 0.08, 'triangle', 0.3, -120); break;
@@ -65,6 +65,13 @@ class Sfx {
       case 'star': this.tone(1046, 0.12, 'square', 0.14); this.tone(1568, 0.2, 'square', 0.12, 0, 0.08); break;
       case 'count': this.tone(1200, 0.05, 'square', 0.12); break;
       case 'fixed': this.tone(440, 0.08, 'triangle', 0.25); this.tone(660, 0.08, 'triangle', 0.25, 0, 0.08); this.tone(880, 0.14, 'triangle', 0.25, 0, 0.16); break;
+      // fanfarra de combo: sobe o tom conforme o multiplicador (a)
+      case 'combo': {
+        const f = 587 + Math.min(4, Math.max(0, (a || 1) - 1)) * 110;
+        [1, 1.26, 1.5, 1.89].forEach((r, i) => this.tone(f * r, 0.1, 'square', 0.15, 0, i * 0.055));
+        break;
+      }
+      case 'combocool': this.tone(420, 0.16, 'sine', 0.14, -160); break;
     }
   }
 }
