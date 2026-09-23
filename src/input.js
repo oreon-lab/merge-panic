@@ -2,18 +2,18 @@
 import * as THREE from 'three';
 
 export const KB_SCHEMES = {
-  kbA: { name: 'Teclado 1', up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], pick: ['KeyE'], use: ['KeyQ'], dash: ['ShiftLeft'],
-         hint: ['WASD', 'E', 'Q', 'Shift'] },
-  kbB: { name: 'Teclado 2', up: ['KeyI'], down: ['KeyK'], left: ['KeyJ'], right: ['KeyL'], pick: ['KeyO'], use: ['KeyU'], dash: ['KeyH'],
-         hint: ['IJKL', 'O', 'U', 'H'] },
+  kbA: { name: 'Teclado 1', up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], pick: ['KeyE'], use: ['KeyQ'], dash: ['ShiftLeft'], buy: ['KeyF'],
+         hint: ['WASD', 'E', 'Q', 'Shift', 'F'] },
+  kbB: { name: 'Teclado 2', up: ['KeyI'], down: ['KeyK'], left: ['KeyJ'], right: ['KeyL'], pick: ['KeyO'], use: ['KeyU'], dash: ['KeyH'], buy: ['KeyP'],
+         hint: ['IJKL', 'O', 'U', 'H', 'P'] },
   kbC: { name: 'Teclado 3', up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'],
-         pick: ['ShiftRight', 'Numpad1', 'Period'], use: ['ControlRight', 'Numpad2', 'Comma'], dash: ['Numpad0', 'Slash'],
-         hint: ['Setas', 'Shift dir.', 'Ctrl dir.', 'Num0'] },
+         pick: ['ShiftRight', 'Numpad1', 'Period'], use: ['ControlRight', 'Numpad2', 'Comma'], dash: ['Numpad0', 'Slash'], buy: ['Numpad3', 'Semicolon'],
+         hint: ['Setas', 'Shift dir.', 'Ctrl dir.', 'Num0', 'Num3'] },
 };
-export const PAD_HINT = ['Analógico', 'A', 'X', 'B'];
-export const MOUSE_HINT = ['Clique', 'Dir.', 'Esq.', 'Meio'];
+export const PAD_HINT = ['Analógico', 'A', 'X', 'B', 'Y'];
+export const MOUSE_HINT = ['Clique', 'Dir.', 'Esq.', 'Meio', 'Esq.'];
 
-const EMPTY = { mx: 0, my: 0, pick: false, use: false, usePressed: false, dash: false, start: false };
+const EMPTY = { mx: 0, my: 0, pick: false, use: false, usePressed: false, dash: false, buy: false, start: false };
 const BLOCK = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab']);
 const CHAO = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // plano do piso, pro clique virar destino
 
@@ -110,6 +110,7 @@ export class Input {
         use: any(s.use, this.down),
         usePressed: any(s.use, this.pressed),
         dash: any(s.dash, this.pressed),
+        buy: any(s.buy, this.pressed),
         start: false,
       };
     }
@@ -119,6 +120,7 @@ export class Input {
       up: any(['ArrowUp', 'KeyW', 'KeyI'], P), down: any(['ArrowDown', 'KeyS', 'KeyK'], P),
       left: any(['ArrowLeft', 'KeyA', 'KeyJ'], P), right: any(['ArrowRight', 'KeyD', 'KeyL'], P),
       confirm: any(['Enter', 'NumpadEnter', 'Space', 'KeyE', 'KeyO'], P), back: any(['Escape', 'Backspace'], P),
+      tab: P.has('Tab'), any: P.size > 0,
     };
 
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -138,6 +140,7 @@ export class Input {
         use: b(2),
         usePressed: edge(2),
         dash: edge(1) || edge(5),
+        buy: edge(3),
         start: edge(9),
       };
       // direção "digital" do analógico para menus
@@ -148,6 +151,8 @@ export class Input {
       }
       if (edge(0) || edge(9)) m.confirm = true;
       if (edge(1)) m.back = true;
+      if (edge(8)) m.tab = true;   // Select abre o menu do HQ
+      if (now.some((v, i) => v && !prev.btn[i])) m.any = true;
       this.prevPad[id] = { btn: now, dir };
     }
     // mouse de uma mão: segure o esquerdo pra andar até o destino travado no
@@ -159,8 +164,10 @@ export class Input {
       use: this.pt.left,
       usePressed: this.pt.leftHit,
       dash: this.pt.middleHit,
+      buy: false, // no mouse de uma mão, compra segurando o esquerdo em cima da placa
       start: false,
     };
+    if (this.pt.leftHit || this.pt.rightHit) m.any = true;
     this.pt.leftHit = this.pt.rightHit = this.pt.middleHit = false;
 
     this.menu = m;
@@ -168,6 +175,8 @@ export class Input {
     this.pressed.clear();
   }
   get(id) { return this.states[id] || EMPTY; }
+  // entrada 'vazia': jogadores parados enquanto um menu está aberto
+  get locked() { return this._locked ||= { get: () => EMPTY, hint: (d) => this.hint(d), devices: () => [] }; }
   devices() { return Object.keys(this.states); }
   globalPressed(code) { return this.global.has(code); }
   anyStart() {

@@ -1,11 +1,18 @@
 import { defineConfig } from 'vite';
 import { attachRelay } from './server/relay.js';
+import { apiMiddleware } from './server/api.js';
 
-// Relay multiplayer na mesma porta do Vite (caminho /mp)
+// Relay multiplayer (/mp) e API de progressão (/api) na mesma porta do Vite
 const relay = () => ({
   name: 'merge-panic-relay',
-  configureServer(server) { if (server.httpServer) attachRelay(server.httpServer); },
-  configurePreviewServer(server) { if (server.httpServer) attachRelay(server.httpServer); },
+  configureServer(server) {
+    server.middlewares.use(apiMiddleware);
+    if (server.httpServer) attachRelay(server.httpServer);
+  },
+  configurePreviewServer(server) {
+    server.middlewares.use(apiMiddleware);
+    if (server.httpServer) attachRelay(server.httpServer);
+  },
 });
 
 export default defineConfig({

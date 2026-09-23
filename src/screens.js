@@ -1,7 +1,13 @@
-// Telas de menu (título, online, como jogar, lobby, pausa, resultados).
+// Telas do jogo. Duas camadas:
+//  - chrome: a moldura fixa do HQ (empresa no topo, time + dock embaixo)
+//  - el: telas cheias e painéis que abrem por cima do HQ
+// Regras de UX iguais em tudo: um botão principal (verde) por tela,
+// Esc/B sempre volta um nível, setas/analógico navegam, Enter/A confirma.
 import { KB_SCHEMES, PAD_HINT, MOUSE_HINT, DEVICE_LABEL } from './input.js';
 import { PLAYER_LOOKS } from './player.js';
 import { sfx } from './audio.js';
+import { icon } from './icons.js';
+import { STAGES, stageOf, nextStage, fmtMoney } from './economy.js';
 
 const h = (tag, cls, html) => {
   const e = document.createElement(tag);
@@ -12,55 +18,102 @@ const h = (tag, cls, html) => {
 const hintOf = (device) => (device === 'mouse' ? MOUSE_HINT : device?.startsWith('gp') ? PAD_HINT : KB_SCHEMES[device]?.hint || PAD_HINT);
 const letters = (txt, cls) => [...txt].map((c, i) => `<span class="${cls}" style="--i:${i}">${c}</span>`).join('');
 const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+// texto vindo de outros jogadores nunca vira HTML
+export const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// barra do estágio da empresa (from = valuation antes, pra animar a subida)
+function stageBar(company, from = null) {
+  const pctOf = (v) => {
+    const st = stageOf(v), nx = nextStage(v);
+    return nx ? Math.min(100, ((v - st.at) / (nx.at - st.at)) * 100) : 100;
+  };
+  const st = stageOf(company.valuation), nx = nextStage(company.valuation);
+  const start = from != null && stageOf(from).id === st.id ? pctOf(from) : pctOf(company.valuation);
+  return `<div class="stage-bar"><div class="sb-top"><span>${st.icon} <b>${st.name}</b></span><small>${nx ? `${fmtMoney(nx.at - company.valuation)} até ${nx.icon} ${nx.name}` : 'topo do mercado!'}</small></div>
+    <div class="sb-track"><div style="width:${start}%" data-to="${pctOf(company.valuation)}"></div></div></div>`;
+}
+
+// moldura padrão dos painéis: cabeçalho, conteúdo, rodapé
+const frame = ({ icon: ic, title, sub = '', body, foot = '', cls = '' }) => `
+  <div class="pnl ${cls}">
+    <div class="pnl-head"><button class="back" data-nav="back" title="Voltar (Esc)">${icon('back', 20)}</button>
+      <div class="pnl-ic">${icon(ic, 22)}</div>
+      <div class="pnl-title"><h2>${title}</h2>${sub ? `<small>${sub}</small>` : ''}</div>
+      <kbd class="esc-hint">Esc</kbd></div>
+    <div class="pnl-body">${body}</div>
+    ${foot ? `<div class="pnl-foot">${foot}</div>` : ''}
+  </div>`;
 
 export class Screens {
   constructor(root) {
+    this.chrome = h('div', 'hq hidden');
     this.el = h('div', 'screen hidden');
-    root.append(this.el);
+    root.append(this.chrome, this.el);
     this.items = [];
-    this.index = 0;
+    this.index = -1;
     this.name = '';
-    this.onAction = null;
     this.keyNav = true;
+    this.dockFocus = false;
+    this.onAction = null;
   }
 
   get visible() { return !this.el.classList.contains('hidden'); }
 
+  // ---------- navegação ----------
   hide() {
     this.el.className = 'screen hidden';
     this.el.innerHTML = '';
-    this.items = [];
     this.name = '';
     clearInterval(this.countTimer);
+    this.bindItems();
   }
 
-  show(name, html, { keyNav = true, focus = 0 } = {}) {
+  show(name, html, { keyNav = true, focus = 0, cls = '' } = {}) {
     clearInterval(this.countTimer);
     this.name = name;
     this.keyNav = keyNav;
-    this.el.className = `screen s-${name}`;
+    this.dockFocus = false;
+    this.chrome.classList.remove('dock-focus');
+    this.el.className = `screen s-${name} ${cls}`;
     this.el.innerHTML = html;
-    this.items = [...this.el.querySelectorAll('[data-nav]')];
-    this.items.forEach((b, i) => {
-      b.addEventListener('mouseenter', () => this.focus(i, true));
-      b.addEventListener('click', (e) => { e.preventDefault(); b.blur(); this.activate(i); });
+    this.bindItems(focus);
+    // barras de progresso animam do valor antigo pro novo
+    setTimeout(() => this.el.querySelectorAll('.sb-track div[data-to]').forEach((d) => { d.style.width = d.dataset.to + '%'; }), 350);
+  }
+
+  // itens navegáveis da camada ativa (painel aberto, ou a dock do HQ)
+  bindItems(focus = 0) {
+    const layer = this.visible ? this.el : this.chrome;
+    this.items = [...layer.querySelectorAll('[data-nav]:not([disabled])')];
+    this.items.forEach((b) => {
+      if (b._bound) return;
+      b._bound = true;
+      b.addEventListener('mouseenter', () => this.focus(this.items.indexOf(b), true));
+      b.addEventListener('click', (e) => { e.preventDefault(); b.blur(); this.activate(this.items.indexOf(b)); });
     });
     this.index = -1;
-    if (keyNav) this.focus(Math.min(focus, this.items.length - 1), false);
+    this.items.forEach((b) => b.classList.remove('focus'));
+    if (this.visible && this.keyNav && this.items.length) this.focus(Math.min(focus, this.items.length - 1), false);
   }
 
   focus(i, sound = true) {
-    if (!this.items.length) return;
+    if (!this.items.length || i < 0) return;
     i = (i + this.items.length) % this.items.length;
     if (i === this.index) return;
     this.items.forEach((b, j) => b.classList.toggle('focus', j === i));
     this.index = i;
+    this.items[i].scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     if (sound) sfx.play('nav');
+  }
+
+  focusNav(nav) {
+    const i = this.items.findIndex((b) => b.dataset.nav === nav);
+    if (i >= 0) this.focus(i, false);
   }
 
   activate(i = this.index) {
     const b = this.items[i];
-    if (!b) return;
+    if (!b || b.disabled) return;
     const a = b.dataset.nav;
     sfx.play(a === 'back' ? 'back' : 'select');
     b.classList.add('pressed');
@@ -68,80 +121,190 @@ export class Screens {
     this.onAction?.(a, b);
   }
 
-  // navegação com teclado/controle
+  // dock do HQ recebe foco com Tab / Select
+  setDockFocus(on) {
+    if (this.visible) return;
+    this.dockFocus = on;
+    this.chrome.classList.toggle('dock-focus', on);
+    this.bindItems();
+    if (on) this.focusNav('sprints');
+  }
+
   handle(m) {
-    if (!this.visible) return;
     if (document.activeElement?.tagName === 'INPUT') return;
-    if (m.back) { sfx.play('back'); this.onAction?.('back'); return; }
-    if (!this.keyNav || !this.items.length) return;
-    const grid = this.el.querySelector('.menu.row');
-    if (m.up || (grid && m.left)) this.focus(this.index - 1);
-    if (m.down || (grid && m.right)) this.focus(this.index + 1);
+    if (!this.visible && !this.dockFocus) return;
+    if (m.back) {
+      sfx.play('back');
+      if (this.dockFocus && !this.visible) this.setDockFocus(false);
+      else this.onAction?.('back');
+      return;
+    }
+    if ((this.visible && !this.keyNav) || !this.items.length) return;
+    const horizontal = this.dockFocus || this.el.querySelector('.nav-h');
+    if (m.up || (horizontal && m.left)) this.focus(this.index - 1);
+    if (m.down || (horizontal && m.right)) this.focus(this.index + 1);
     if (m.confirm) this.activate();
   }
 
-  // ---------------------------------------------------------------
-  title({ muted, best = 0, stars = 0, games = 0, bestCombo = 0 }) {
-    const rec = best > 0
-      ? `<div class="record">
-          <span>🏆 <b>${best}</b> pts</span>
-          <span>⭐ <b>${stars}</b> estrelas</span>
-          ${bestCombo >= 2 ? `<span>🔥 <b>${bestCombo}</b> seguidas</span>` : ''}
-          <span>🎮 ${games} sprint${games === 1 ? '' : 's'}</span>
-        </div>`
-      : '';
-    this.show('title', `
-      <div class="title-wrap">
+  // =================================================================
+  // Abertura
+  // =================================================================
+  splash({ status = 'loading' }) {
+    const st = status === 'loading' ? '<span class="sp-status">⏳ Conectando ao servidor...</span>'
+      : status === 'offline' ? '<span class="sp-status warn">⚠️ Servidor offline — dá pra jogar, mas nada será salvo</span>' : '';
+    this.show('splash', `
+      <div class="splash">
         <div class="logo-big">
           <div class="lg1">${letters('MERGE', 'lt')}</div>
           <div class="lg2">${letters('PANIC', 'lt')}</div>
         </div>
-        <div class="tagline">Overcooked de devs · co-op caótico para até 4 jogadores</div>
-        ${rec}
-        <div class="menu">
-          <button class="mbtn" data-nav="local"><i>🎮</i><span><b>Jogar local</b><small>Mesmo PC · teclado e controles</small></span></button>
-          <button class="mbtn" data-nav="online"><i>🌐</i><span><b>Jogar online</b><small>Crie uma sala e chame a galera</small></span></button>
-          <button class="mbtn" data-nav="howto"><i>📖</i><span><b>Como jogar</b><small>Fluxo, controles e o caos</small></span></button>
-          <button class="mbtn slim" data-nav="sound"><i>${muted ? '🔇' : '🔊'}</i><span><b>Som: ${muted ? 'desligado' : 'ligado'}</b></span></button>
-        </div>
-        <div class="foot"><kbd>↑</kbd><kbd>↓</kbd> navegar · <kbd>Enter</kbd> confirmar · 🎮 compatível com controle</div>
+        <div class="tagline">Monte sua empresa de software. Sobreviva às sprints. Não faça deploy na sexta.</div>
+        <button class="press" data-nav="go">Aperte qualquer tecla</button>
+        ${st}
+        <div class="sp-foot">🎮 controle · ⌨️ até 3 no mesmo teclado · 🌐 online com amigos</div>
       </div>`);
   }
 
-  online({ busy = '', error = '', code = '' } = {}) {
-    this.show('online', `
-      <div class="panel-wrap">
-        <div class="scr-head"><button class="back" data-nav="back">←</button><h2>🌐 Jogar online</h2></div>
-        <div class="two-cards">
-          <div class="ocard">
-            <div class="oc-ic">🏠</div>
-            <h3>Criar sala</h3>
-            <p>Você vira o host: sua máquina roda a partida. Mande o link pros amigos.</p>
-            <button class="big-btn" data-nav="create">${busy === 'create' ? 'Criando...' : '➕ Criar sala'}</button>
-          </div>
-          <div class="ocard">
-            <div class="oc-ic">🔑</div>
-            <h3>Entrar numa sala</h3>
-            <p>Digite o código de 4 letras que o host te passou.</p>
-            <input id="room-code" maxlength="4" placeholder="ABCD" value="${code}" autocomplete="off" spellcheck="false">
-            <button class="big-btn blue" data-nav="join">${busy === 'join' ? 'Entrando...' : '🚪 Entrar'}</button>
-          </div>
+  // =================================================================
+  // Fundar empresa (primeira vez)
+  // =================================================================
+  found({ name = '', company = '', error = '' } = {}) {
+    this.show('found', `
+      <div class="found">
+        <div class="fd-card">
+          <div class="fd-ic">🏚️</div>
+          <h2>Toda Big Tech começou numa garagem.</h2>
+          <p>Cada sprint gera receita. Invista no escritório e cresça de <b>Garagem</b> até <b>Big Tech</b>. O progresso fica salvo no servidor.</p>
+          <label class="fld"><span>Como te chamam?</span><input id="w-name" maxlength="20" value="${esc(name)}" placeholder="Ex.: Ana" autocomplete="off"></label>
+          <label class="fld"><span>Nome da empresa</span><input id="w-company" maxlength="20" value="${esc(company)}" placeholder="Ex.: Café & Commits" autocomplete="off"></label>
+          ${error ? `<div class="err">⚠️ ${esc(error)}</div>` : ''}
+          <button class="btn primary big" data-nav="found">🚀 Fundar empresa</button>
+          <details class="restore"><summary>Já jogo em outro navegador</summary>
+            <p>Cole o código da sua conta (fica em ⚙️ Ajustes).</p>
+            <div class="row"><input id="w-code" placeholder="p_...." autocomplete="off"><button class="btn" data-nav="restore">Restaurar</button></div>
+          </details>
         </div>
-        ${error ? `<div class="err">⚠️ ${error}</div>` : ''}
-        <div class="foot">Dica: com <b>ngrok</b> (<code>ngrok http 5199</code>) dá pra jogar pela internet.</div>
-      </div>`, { focus: busy === 'join' ? 1 : 0 });
-    const input = this.el.querySelector('#room-code');
-    input.addEventListener('input', () => { input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { this.onAction?.('join'); }
-      if (e.key === 'Escape') input.blur();
+      </div>`, { keyNav: false });
+    this.el.querySelectorAll('input').forEach((input) => input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.onAction?.(input.id === 'w-code' ? 'restore' : 'found');
       e.stopPropagation();
-    });
+    }));
+    setTimeout(() => this.el.querySelector(name ? '#w-company' : '#w-name')?.focus(), 60);
+  }
+  field(id) { return this.el.querySelector('#' + id)?.value.trim() || ''; }
+
+  // =================================================================
+  // HQ: moldura fixa por cima do escritório 3D
+  // =================================================================
+  hq({ company, role, players, names, myId, freeDevices, code, peers, canStart, levelName, offline }) {
+    const co = company
+      ? `<div class="hq-co"><div class="hq-ic">${stageOf(company.valuation).icon}</div>
+          <div class="hq-coinfo"><b>${esc(company.name)}</b>${role === 'client' ? '<small class="guest">HQ do host</small>' : ''}${stageBar(company)}</div>
+          <div class="hq-cash"><small>Caixa</small><b>${fmtMoney(company.cash)}</b></div></div>`
+      : `<div class="hq-co"><div class="hq-ic">🏚️</div><div class="hq-coinfo"><b>${offline ? 'Modo offline' : 'Conectando...'}</b><small>${offline ? 'o progresso não será salvo' : ''}</small></div></div>`;
+    const room = code
+      ? `<button class="hq-room" data-nav="room">${icon('globe', 18)} Sala <b>${code}</b><small>${role === 'host' ? `${peers} PC${peers > 1 ? 's' : ''}` : 'convidado'}</small></button>` : '';
+    const slots = [0, 1, 2, 3].map((i) => {
+      const p = players[i];
+      const look = PLAYER_LOOKS[i];
+      if (!p) return `<div class="tm empty"><b>P${i + 1}</b><small>aperte PEGAR</small></div>`;
+      const mine = p.owner === myId;
+      const k = hintOf(p.device);
+      return `<div class="tm" style="--c:${look.color}"><div class="tm-top"><b>${look.name}</b><span>${esc(names[i] || '')}</span></div>
+        <small>${mine ? `${DEVICE_LABEL(p.device)} · <kbd>${k[1]}</kbd> pegar · <kbd>${k[2]}</kbd> trabalhar · <kbd>${k[4]}</kbd> comprar` : '🌐 outro PC'}</small></div>`;
+    }).join('');
+    const join = freeDevices.map((id) => (id === 'mouse' ? '<kbd>Dir.</kbd> mouse' : `<kbd>${hintOf(id)[1]}</kbd> ${hintOf(id)[0]}`)).join(' · ') + ' · <kbd>A</kbd> controle';
+    const tip = !players.length ? `👋 <b>Entre no time:</b> ${join}`
+      : role === 'client' ? '⏳ O host escolhe a sprint. Enquanto isso, passeie pelo HQ!'
+      : `✅ <b>Time pronto!</b> <kbd>Enter</kbd> começa a sprint · 🟨 pise numa placa amarela e aperte <kbd>F</kbd> <kbd>P</kbd> <kbd>Y</kbd> pra comprar`;
+    this.chrome.className = 'hq' + (this.dockFocus ? ' dock-focus' : '');
+    this.chrome.innerHTML = `
+      <div class="hq-top">${co}<div class="hq-right">${room}</div></div>
+      <div class="hq-tip">${tip}</div>
+      <div class="hq-bottom">
+        <div class="team">${slots}</div>
+        <div class="dock">
+          <button class="dk" data-nav="room">${icon('users', 22)}<span>${code ? 'Sala' : 'Convidar'}</span></button>
+          <button class="dk play ${canStart ? '' : 'dim'}" data-nav="sprints">${icon('play', 22)}<span>Jogar</span><small>${esc(levelName)}</small></button>
+          <button class="dk" data-nav="help">${icon('book', 22)}<span>Ajuda</span></button>
+          <button class="dk" data-nav="settings">${icon('gear', 22)}<span>Ajustes</span></button>
+        </div>
+        <div class="dock-hint">${this.dockFocus ? '<kbd>←</kbd><kbd>→</kbd> escolher · <kbd>Enter</kbd> abrir · <kbd>Esc</kbd> voltar a andar' : '<kbd>Tab</kbd> menu pelo teclado · <kbd>Enter</kbd> jogar · <kbd>M</kbd> som'}</div>
+      </div>`;
+    if (!this.visible) {
+      const keep = this.dockFocus ? this.items[this.index]?.dataset.nav : null;
+      this.bindItems();
+      if (keep) this.focusNav(keep);
+    }
+  }
+  hideChrome() { this.chrome.className = 'hq hidden'; this.dockFocus = false; }
+
+  // =================================================================
+  // Sala online
+  // =================================================================
+  room({ role, code = '', link = '', peers = 0, busy = '', error = '', typed = '' }) {
+    let body;
+    if (role === 'host') {
+      body = `<div class="room-big"><small>Código da sala</small><b class="code xl">${code}</b>
+          <div class="row"><input class="o-link" readonly value="${esc(link)}"><button class="btn primary" data-nav="copy">${icon('copy', 18)} Copiar link</button></div>
+          <p>🟢 <b>${peers} PC${peers > 1 ? 's' : ''}</b> na sala. Quem entrar aparece andando no seu HQ e entra no time apertando PEGAR.</p></div>`;
+    } else if (role === 'client') {
+      body = `<div class="room-big"><small>Você está na sala</small><b class="code xl">${code}</b>
+          <p>Você joga no HQ do host: a empresa, as compras e a escolha da sprint são dele. Seu histórico de dev fica salvo no <b>seu</b> perfil.</p></div>`;
+    } else {
+      body = `<div class="two-cards">
+          <div class="ocard"><div class="oc-ic">🏠</div><h3>Criar sala</h3><p>Seu PC vira o host. Os amigos entram no seu HQ e jogam as sprints da sua empresa.</p>
+            <button class="btn primary big" data-nav="create">${busy === 'create' ? 'Criando...' : `${icon('plus', 18)} Criar sala`}</button></div>
+          <div class="ocard"><div class="oc-ic">🔑</div><h3>Entrar numa sala</h3><p>Digite o código de 4 letras que o host te passou.</p>
+            <input id="room-code" maxlength="4" placeholder="ABCD" value="${esc(typed)}" autocomplete="off" spellcheck="false">
+            <button class="btn blue big" data-nav="join">${busy === 'join' ? 'Entrando...' : `${icon('door', 18)} Entrar`}</button></div>
+        </div>
+        <p class="hint">Pela internet: rode <code>ngrok http 5199</code> e mande o link.</p>`;
+    }
+    const foot = role === 'host' ? `<button class="btn danger" data-nav="leave">${icon('close', 18)} Fechar sala</button>`
+      : role === 'client' ? `<button class="btn danger" data-nav="leave">${icon('exit', 18)} Sair da sala</button>` : '';
+    this.show('room', frame({
+      icon: 'globe', title: role === 'local' ? 'Jogar online' : 'Sala online',
+      body: body + (error ? `<div class="err">⚠️ ${esc(error)}</div>` : ''), foot,
+    }), { focus: busy === 'join' ? 2 : 1 });
+    const input = this.el.querySelector('#room-code');
+    if (input) {
+      input.addEventListener('input', () => { input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') this.onAction?.('join');
+        if (e.key === 'Escape') input.blur();
+        e.stopPropagation();
+      });
+    }
+    this.link = link;
   }
   get roomCode() { return this.el.querySelector('#room-code')?.value.trim() || ''; }
 
-  howto() {
-    const kb = Object.values(KB_SCHEMES).map((s) => `<tr><td>⌨️ ${s.name}</td><td><kbd>${s.hint[0]}</kbd></td><td><kbd>${s.hint[1]}</kbd></td><td><kbd>${s.hint[2]}</kbd></td><td><kbd>${s.hint[3]}</kbd></td></tr>`).join('');
+  // =================================================================
+  // Ajustes
+  // =================================================================
+  settings({ muted, profile, code, showCode, msg = '' }) {
+    this.show('settings', frame({
+      icon: 'gear', title: 'Ajustes',
+      body: `
+        <div class="set-row"><div><b>Som</b><small>Atalho: M</small></div><button class="btn" data-nav="sound">${muted ? `${icon('mute', 18)} Desligado` : `${icon('volume', 18)} Ligado`}</button></div>
+        ${profile ? `<div class="set-row"><div><b>Nome de dev</b><small>Aparece pros outros jogadores</small></div>
+          <div class="row"><input id="s-name" maxlength="20" value="${esc(profile.name)}"><button class="btn" data-nav="rename">Salvar</button></div></div>
+        <div class="set-row"><div><b>Seu histórico</b><small>${profile.stats.games} sprints · 🏆 ${profile.stats.best} pts · ⭐ ${profile.stats.stars} · ✨ ${profile.xp} XP</small></div></div>
+        <div class="set-row"><div><b>Código da conta</b><small>Continue em outro navegador. Não compartilhe!</small></div>
+          ${showCode ? `<button class="btn" data-nav="copycode">${icon('copy', 18)} Copiar</button>` : `<button class="btn" data-nav="showcode">${icon('key', 18)} Mostrar</button>`}</div>
+        ${showCode ? `<code class="acct">${esc(code)}</code>` : ''}` : ''}
+        ${msg ? `<div class="toast-in">${msg}</div>` : ''}
+        <div class="set-row"><div><b>Tela de abertura</b><small>Volta pro logo do jogo</small></div><button class="btn" data-nav="splash">${icon('exit', 18)} Ir</button></div>`,
+    }));
+    this.el.querySelector('#s-name')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.onAction?.('rename'); e.stopPropagation(); });
+  }
+
+  // =================================================================
+  // Ajuda
+  // =================================================================
+  help() {
+    const kb = Object.values(KB_SCHEMES).map((s) => `<tr><td>⌨️ ${s.name}</td><td><kbd>${s.hint[0]}</kbd></td><td><kbd>${s.hint[1]}</kbd></td><td><kbd>${s.hint[2]}</kbd></td><td><kbd>${s.hint[3]}</kbd></td><td><kbd>${s.hint[4]}</kbd></td></tr>`).join('');
     const chaos = [
       ['🤖', 'Agente de IA', 'Codifica sozinho e rápido, mas às vezes deixa bug escondido.'],
       ['❌', 'Testes falham', 'O ticket ganha uma etapa 🔧 Corrigir. Conserte e teste de novo.'],
@@ -149,170 +312,144 @@ export class Screens {
       ['⚔️', 'Conflito de merge', 'Segure Trabalhar no Merge. Evite merges colados!'],
       ['🚨', 'Bug em produção', 'Bug que escapou vira Hotfix. Pontos escorrem até resolver.'],
       ['📶', 'Wi-Fi caiu', 'IA e testes param. Reinicie o roteador.'],
-      ['🤖💥', 'IA alucinando', 'Segure Trabalhar no agente para reiniciar.'],
+      ['💥', 'IA alucinando', 'Segure Trabalhar no agente para reiniciar.'],
       ['📅', 'Reunião surpresa', 'Um dev fica preso. O time cobre!'],
     ].map(([i, t, d]) => `<div class="chaos"><div class="ch-i">${i}</div><div><b>${t}</b><p>${d}</p></div></div>`).join('');
-    this.show('howto', `
-      <div class="panel-wrap wide">
-        <div class="scr-head"><button class="back" data-nav="back">←</button><h2>📖 Como jogar</h2></div>
-        <div class="howto-grid">
-          <section>
-            <h3>O fluxo de um ticket</h3>
-            <div class="flow">
-              <div class="fs"><i>📋</i><b>Backlog</b><small>pegue</small></div><span>›</span>
-              <div class="fs"><i>💻</i><b>Implementar</b><small>segure trabalhar</small></div><span>›</span>
-              <div class="fs"><i>🧪</i><b>Testes</b><small>automático</small></div><span>›</span>
-              <div class="fs"><i>👀</i><b>Review</b><small>outro dev</small></div><span>›</span>
-              <div class="fs"><i>🔀</i><b>Merge</b><small>entregue!</small></div>
-            </div>
-            <div class="types">
-              <span class="tp t-bug">🐞 Bug <small>sem review · 20 pts</small></span>
-              <span class="tp t-feature">✨ Feature <small>40 pts</small></span>
-              <span class="tp t-project">🚀 Projeto <small>longo · 80 pts</small></span>
-              <span class="tp t-hotfix">🚨 Hotfix <small>urgente!</small></span>
-            </div>
-            <h3>Dicas de time</h3>
-            <ul class="tips">
-              <li>👯 <b>Pair programming</b>: 2 devs na mesma mesa = mais rápido e <b>sem bugs</b>.</li>
-              <li>🙅 Ninguém revisa o próprio código. Combinem quem revisa!</li>
-              <li>⏱️ Entregar rápido dá gorjeta. Tocar em equipe dá bônus 🤝.</li>
-              <li>🔥 <b>Combo</b>: entregue em sequência e os pontos multiplicam até <b>x3</b>. Deixar um prazo estourar esfria tudo.</li>
-              <li>⭐ As estrelas aparecem na barrinha de pontos — dá pra ver o próximo marco durante a sprint.</li>
-              <li>☕ Café deixa você mais rápido por alguns segundos.</li>
-              <li>🖱️ Dá pra jogar de <b>uma mão só</b>: segure o clique esquerdo pra andar até o cursor (e trabalhar, se parar numa estação), botão direito pra pegar/soltar, meio pro dash.</li>
-              <li>🗑️ Won't fix descarta um ticket impossível (com penalidade).</li>
-            </ul>
-          </section>
-          <section>
-            <h3>Controles</h3>
-            <table class="ctrl"><tr><th></th><th>Mover</th><th>Pegar</th><th>Trabalhar</th><th>Dash</th></tr>${kb}
-              <tr><td>🎮 Controle</td><td><kbd>${PAD_HINT[0]}</kbd></td><td><kbd>${PAD_HINT[1]}</kbd></td><td><kbd>${PAD_HINT[2]}</kbd></td><td><kbd>${PAD_HINT[3]}</kbd></td></tr>
-              <tr><td>🖱️ Mouse (uma mão)</td><td><kbd>${MOUSE_HINT[0]}</kbd></td><td><kbd>${MOUSE_HINT[1]}</kbd></td><td><kbd>${MOUSE_HINT[2]}</kbd></td><td><kbd>${MOUSE_HINT[3]}</kbd></td></tr></table>
-            <h3>O caos</h3>
-            <div class="chaos-grid">${chaos}</div>
-          </section>
-        </div>
-      </div>`);
+    this.show('help', frame({
+      icon: 'book', title: 'Como jogar', cls: 'wide',
+      body: `<div class="howto-grid">
+        <section>
+          <h3>1 · O fluxo de um ticket</h3>
+          <div class="flow">
+            <div class="fs"><i>📋</i><b>Backlog</b><small>pegue</small></div><span>›</span>
+            <div class="fs"><i>💻</i><b>Implementar</b><small>segure trabalhar</small></div><span>›</span>
+            <div class="fs"><i>🧪</i><b>Testes</b><small>automático</small></div><span>›</span>
+            <div class="fs"><i>👀</i><b>Review</b><small>outro dev</small></div><span>›</span>
+            <div class="fs"><i>🔀</i><b>Merge</b><small>entregue!</small></div>
+          </div>
+          <div class="types">
+            <span class="tp t-bug">🐞 Bug <small>sem review</small></span>
+            <span class="tp t-feature">✨ Feature</span>
+            <span class="tp t-project">🚀 Projeto <small>longo</small></span>
+            <span class="tp t-hotfix">🚨 Hotfix <small>urgente!</small></span>
+          </div>
+          <h3>2 · A empresa</h3>
+          <ul class="tips">
+            <li>💰 Toda sprint vira receita: pontos + bônus por estrela. Sprints mais difíceis pagam mais.</li>
+            <li>🟨 <b>Placas de compra</b>: pise numa placa amarela e aperte <b>Comprar</b> (<kbd>F</kbd> / <kbd>P</kbd> / <kbd>Num3</kbd> / <kbd>Y</kbd> no controle). Mesas, agentes de IA e melhorias aparecem na hora — dá pra comprar até no meio da sprint com o dinheiro que está entrando.</li>
+            <li>📈 A receita acumulada sobe a empresa de estágio: 🏚️ → 🚀 → 📈 → 🦄 → 🏢. Cada estágio libera placas novas — e sprints mais caóticas que pagam mais.</li>
+          </ul>
+          <h3>3 · Dicas de time</h3>
+          <ul class="tips">
+            <li>👯 <b>Pair programming</b>: 2 devs na mesma mesa = mais rápido e <b>sem bugs</b>.</li>
+            <li>🙅 Ninguém revisa o próprio código. Combinem quem revisa!</li>
+            <li>🔥 <b>Combo</b>: entregas seguidas multiplicam os pontos até <b>x3</b>.</li>
+            <li>☕ Café deixa você mais rápido por alguns segundos.</li>
+          </ul>
+        </section>
+        <section>
+          <h3>Controles</h3>
+          <table class="ctrl"><tr><th></th><th>Mover</th><th>Pegar</th><th>Trabalhar</th><th>Dash</th><th>Comprar</th></tr>${kb}
+            <tr><td>🎮 Controle</td><td><kbd>${PAD_HINT[0]}</kbd></td><td><kbd>${PAD_HINT[1]}</kbd></td><td><kbd>${PAD_HINT[2]}</kbd></td><td><kbd>${PAD_HINT[3]}</kbd></td><td><kbd>${PAD_HINT[4]}</kbd></td></tr>
+            <tr><td>🖱️ Mouse</td><td><kbd>${MOUSE_HINT[0]}</kbd></td><td><kbd>${MOUSE_HINT[1]}</kbd></td><td><kbd>${MOUSE_HINT[2]}</kbd></td><td><kbd>${MOUSE_HINT[3]}</kbd></td><td><kbd>segurar</kbd></td></tr></table>
+          <h3>O caos</h3>
+          <div class="chaos-grid">${chaos}</div>
+        </section>
+      </div>`,
+    }));
   }
 
-  // lobby: jogadores andam pelo escritório; teclas de menu desligadas
-  lobby({ level, players, myId = 0, role = 'local', code = '', link = '', peers = 0, freeDevices = [],
-          index = 0, count = 1, locked = false, best = 0, starsBest = 0 }) {
-    const slots = [0, 1, 2, 3].map((i) => {
-      const p = players[i];
-      const look = PLAYER_LOOKS[i];
-      if (!p) {
-        return `<div class="slot2 empty"><div class="sl-num">P${i + 1}</div><div class="sl-wait">Aperte <b>PEGAR</b><br>para entrar</div></div>`;
-      }
-      const mine = p.owner === myId;
-      const hint = hintOf(p.device);
-      const dev = !mine ? '🌐 outro PC' : DEVICE_LABEL(p.device);
-      return `<div class="slot2" style="--c:${look.color}">
-        <div class="sl-top"><div class="sl-num">${look.name}</div><div class="sl-dev">${dev}${mine && role !== 'local' ? ' · <b>você</b>' : ''}</div></div>
-        ${mine ? `<div class="sl-keys"><span><kbd>${hint[0]}</kbd> mover</span><span><kbd>${hint[1]}</kbd> pegar</span><span><kbd>${hint[2]}</kbd> trabalhar</span><span><kbd>${hint[3]}</kbd> dash</span></div>`
-          : '<div class="sl-keys"><span>Pronto pra codar 👋</span></div>'}
-      </div>`;
-    }).join('');
-    const join = freeDevices.map((id) => (id === 'mouse'
-      ? '<span><kbd>Dir.</kbd> mouse (uma mão)</span>'
-      : `<span><kbd>${hintOf(id)[1]}</kbd> ${hintOf(id)[0]}</span>`)).join('') + '<span><kbd>A</kbd> controle</span>';
-    const room = role === 'host'
-      ? `<div class="room"><span>Sala</span><b class="code">${code}</b><button class="chip" data-nav="copy">📋 Copiar link</button><small>${peers} PC${peers > 1 ? 's' : ''}</small></div>`
-      : role === 'client' ? `<div class="room"><span>Sala</span><b class="code">${code}</b><small>conectado</small></div>` : '';
-    const canStart = players.length && role !== 'client';
-    const picker = role === 'client' ? '' : `<div class="lv-pick">
-        <button class="lv-arrow" data-nav="prevLevel" ${index <= 0 ? 'disabled' : ''}>◀</button>
-        <span class="lv-count">Fase ${index + 1}/${count}</span>
-        <button class="lv-arrow" data-nav="nextLevel" ${index + 1 >= count ? 'disabled' : ''}>▶</button>
-      </div>`;
-    const bestLine = best > 0
-      ? `<div class="lv-best">🏆 seu melhor aqui: <b>${best}</b> pts${starsBest ? ` · ${'⭐'.repeat(starsBest)}` : ''}</div>`
-      : '';
-    this.show('lobby', `
-      <div class="lobby-top">
-        <button class="back" data-nav="back">←</button>
-        <div class="lt-title"><h2>Monte o time</h2><small>Andem pelo escritório enquanto esperam 😄</small></div>
-        ${room}
-      </div>
-      <div class="level-card ${locked ? 'locked' : ''}">
-        <div class="lv-name">${level.name}</div>
-        <div class="lv-sub">${level.subtitle}</div>
-        <div class="lv-meta"><span>⏱️ ${fmtTime(level.duration)}</span><span>🎯 ${level.maxOrders} demandas</span><span>⭐ ${level.stars.join(' / ')}</span></div>
-        ${bestLine}
-        ${picker}
-        ${locked ? '<div class="lv-lock">🔒 Termine a fase anterior com pelo menos ⭐ 1</div>' : (role === 'client' ? '' : '<small class="lv-hint"><kbd>[</kbd> <kbd>]</kbd> trocar de sprint</small>')}
-      </div>
-      <div class="lobby-bottom">
-        <div class="slots2">${slots}</div>
-        <div class="lobby-actions">
-          <div class="join-keys">Entrar: ${join}</div>
-          ${role === 'client'
-            ? '<div class="wait-host">⏳ Aguardando o host começar...</div>'
-            : `<button class="start-btn ${canStart ? '' : 'off'}" data-nav="start">▶ Começar sprint <kbd>Espaço</kbd></button>`}
-        </div>
-      </div>`, { keyNav: false });
-    this.link = link;
-  }
-
+  // =================================================================
+  // Pausa
+  // =================================================================
   pause({ remote }) {
     if (remote) {
-      this.show('pause', `<div class="modal"><div class="m-title">⏸️ O host pausou</div><p>Hora do cafezinho ☕</p></div>`, { keyNav: false });
+      this.show('pause', `<div class="modal"><div class="m-title">${icon('pause', 30)} O host pausou</div><p>Hora do cafezinho ☕</p></div>`, { keyNav: false });
       return;
     }
     this.show('pause', `
       <div class="modal">
-        <div class="m-title">⏸️ Pausado</div>
+        <div class="m-title">${icon('pause', 30)} Pausado</div>
         <p>Parece aquela call que ninguém liga a câmera.</p>
         <div class="menu">
-          <button class="mbtn slim" data-nav="resume"><i>▶</i><span><b>Continuar</b></span></button>
-          <button class="mbtn slim" data-nav="restart"><i>🔁</i><span><b>Reiniciar sprint</b></span></button>
-          <button class="mbtn slim" data-nav="lobby"><i>👥</i><span><b>Voltar ao lobby</b></span></button>
-          <button class="mbtn slim" data-nav="menu"><i>🏠</i><span><b>Menu principal</b></span></button>
+          <button class="btn primary big" data-nav="resume">${icon('play', 18)} Continuar</button>
+          <button class="btn big" data-nav="restart">${icon('restart', 18)} Reiniciar sprint</button>
+          <button class="btn big ghost" data-nav="quit">${icon('flag', 18)} Desistir <small>volta ao HQ, sem receita</small></button>
         </div>
       </div>`);
   }
 
-  results(r, { role }) {
-    const stars = [1, 2, 3].map((i) => `<span class="star ${r.stars >= i ? 'on' : ''}" style="--d:${0.5 + i * 0.35}s">★</span>`).join('');
-    const cards = r.players.map((p, i) => `
-      <div class="pcard" style="--c:${p.color};--d:${1.6 + i * 0.12}s">
-        <div class="pc-name">${p.name}</div>
-        <div class="pc-title">${p.title}</div>
-        <div class="pc-stats"><span>💻 ${p.stats.coded}</span><span>👀 ${p.stats.reviewed}</span><span>🔧 ${p.stats.fixed}</span><span>🔌 ${p.stats.repairs}</span><span>🔀 ${p.stats.delivered}</span><span>☕ ${p.stats.coffee}</span></div>
-      </div>`).join('');
-    const buttons = role === 'client'
-      ? '<div class="wait-host">⏳ Aguardando o host...</div><div class="menu row"><button class="mbtn slim" data-nav="menu"><i>🚪</i><span><b>Sair da sala</b></span></button></div>'
-      : `<div class="menu row">
-          <button class="mbtn slim" data-nav="again"><i>🔁</i><span><b>Jogar de novo</b></span></button>
-          <button class="mbtn slim" data-nav="lobby"><i>👥</i><span><b>Lobby</b></span></button>
-          <button class="mbtn slim" data-nav="menu"><i>🏠</i><span><b>Menu</b></span></button>
-        </div>`;
-    this.show('results', `
-      <div class="results2">
-        <div class="r-kicker">SPRINT ENCERRADA${r.levelName ? ` · ${r.levelName.split(' — ')[0]}` : ''}</div>
+  // =================================================================
+  // Resultado em 3 passos: desempenho → empresa → time
+  // =================================================================
+  results(r, { role, step = 1 }) {
+    this.res = { r, role, step };
+    const dots = ['Desempenho', 'Empresa', 'Time'].map((t, i) => `<span class="${i + 1 <= step ? 'on' : ''}"><i></i>${t}</span>`).join('');
+    const next = `<button class="btn primary big" data-nav="next">Continuar ${icon('play', 16)}</button>`;
+    let body = '', foot = '';
+
+    if (step === 1) {
+      const stars = [1, 2, 3].map((i) => `<span class="star ${r.stars >= i ? 'on' : ''}" style="--d:${0.3 + i * 0.35}s">★</span>`).join('');
+      body = `<div class="r-kicker">SPRINT ENCERRADA${r.levelName ? ` · ${r.levelName.split(' — ')[0]}` : ''}</div>
         <div class="r-head">${r.headline}</div>
         <div class="stars2">${stars}</div>
         <div class="r-score"><span class="count">0</span><small>pontos</small></div>
-        ${r.unlockedName ? `<div class="r-unlock">🔓 <b>${r.unlockedName}</b> desbloqueada!</div>`
-          : (r.stars === 0 && r.hasNext ? '<div class="r-locked">⭐ Tire pelo menos 1 estrela pra liberar a próxima sprint</div>' : '')}
-        ${r.record ? `<div class="r-rec new">🏆 NOVO RECORDE!<small>${r.best > 0 ? `superou os ${r.best} pts anteriores` : 'primeira sprint registrada'}</small></div>`
-          : r.best > 0 ? `<div class="r-rec">🏆 Recorde: ${r.best} pts<small>faltaram ${Math.max(0, r.best - r.score)} pra bater</small></div>` : ''}
-        <div class="r-line"><span>✅ ${r.delivered} entregues</span><span>❌ ${r.failed} perdidos</span><span>🗑️ ${r.trashed} won't fix</span>${r.combo >= 2 ? `<span>🔥 ${r.combo} seguidas</span>` : ''}</div>
-        <div class="r-cards">${cards}</div>
-        ${buttons}
-      </div>`);
-    // placar contando
-    const el = this.el.querySelector('.count');
-    const start = performance.now(), dur = 1300;
-    this.countTimer = setInterval(() => {
-      const k = Math.min(1, (performance.now() - start) / dur);
-      el.textContent = Math.round(r.score * (1 - Math.pow(1 - k, 3)));
-      if (k < 1 && Math.random() < 0.5) sfx.play('count');
-      if (k >= 1) {
-        clearInterval(this.countTimer);
-        if (r.record) sfx.play('combo', 3);
+        <div class="r-line"><span>✅ ${r.delivered} entregues</span><span>❌ ${r.failed} perdidos</span><span>🗑️ ${r.trashed} won't fix</span>${r.combo >= 2 ? `<span>🔥 ${r.combo} seguidas</span>` : ''}</div>`;
+      foot = next;
+    } else if (step === 2) {
+      const e = r.economy;
+      if (!e) {
+        body = '<div class="r-kicker">RECEITA DA SPRINT</div><div class="r-wait">💾 Registrando no servidor...</div>';
+        foot = '<button class="btn big" disabled>Aguarde...</button>';
+      } else if (e.error) {
+        body = `<div class="r-kicker">RECEITA DA SPRINT</div><div class="err">⚠️ ${esc(e.error)}</div>`;
+        foot = next;
+      } else {
+        const c = e.company;
+        body = `<div class="r-kicker">RECEITA DA SPRINT</div>
+          <div class="r-money"><span>💰 +<b class="count">${fmtMoney(0)}</b></span><small>para ${esc(c.name)} · caixa agora ${fmtMoney(c.cash)}</small></div>
+          ${stageBar(c, c.valuation - e.payout)}
+          ${e.stageUp != null ? `<div class="r-stageup">🎉 A empresa virou <b>${STAGES[e.stageUp].icon} ${STAGES[e.stageUp].name}</b>! Melhorias novas liberadas.</div>` : ''}
+          ${e.record ? `<div class="r-rec new">🏆 NOVO RECORDE DA SPRINT!<small>${e.prevBest > 0 ? `superou ${e.prevBest} pts` : 'primeira vez nesta sprint'}</small></div>` : ''}
+          ${e.xp ? `<div class="r-xp">✨ +${e.xp} XP pra cada dev do time</div>` : ''}`;
+        foot = next;
       }
-    }, 40);
-    [1, 2, 3].forEach((i) => { if (r.stars >= i) setTimeout(() => sfx.play('star'), (0.5 + i * 0.35) * 1000); });
+    } else {
+      const cards = r.players.map((p, i) => `
+        <div class="pcard" style="--c:${p.color};--d:${0.1 + i * 0.12}s">
+          <div class="pc-name">${p.name}</div>
+          <div class="pc-title">${p.title}</div>
+          <div class="pc-stats"><span>💻 ${p.stats.coded}</span><span>👀 ${p.stats.reviewed}</span><span>🔧 ${p.stats.fixed}</span><span>🔌 ${p.stats.repairs}</span><span>🔀 ${p.stats.delivered}</span><span>☕ ${p.stats.coffee}</span></div>
+        </div>`).join('');
+      body = `<div class="r-kicker">PRÊMIOS DO TIME</div><div class="r-cards">${cards}</div>
+        ${r.economy?.tease ? `<div class="r-tease">${r.economy.tease}</div>` : ''}`;
+      foot = role === 'client'
+        ? `<div class="foot-msg">⏳ Aguardando o host</div><button class="btn danger" data-nav="leave">${icon('exit', 18)} Sair da sala</button>`
+        : `<button class="btn big" data-nav="again">${icon('restart', 18)} Jogar de novo</button><button class="btn primary big" data-nav="hq">${icon('building', 18)} Voltar ao HQ</button>`;
+    }
+
+    this.show('results', `<div class="results3"><div class="r-dots">${dots}</div><div class="r-body">${body}</div><div class="pnl-foot">${foot}</div></div>`,
+      { focus: step === 3 && role !== 'client' ? 1 : 0 });
+
+    // animações de contagem
+    const el = this.el.querySelector('.count');
+    const target = step === 1 ? r.score : step === 2 ? r.economy?.payout : null;
+    if (el && target != null) {
+      const t0 = performance.now(), dur = step === 1 ? 1300 : 1100;
+      this.countTimer = setInterval(() => {
+        const k = Math.min(1, (performance.now() - t0) / dur);
+        const v = Math.round(target * (1 - Math.pow(1 - k, 3)));
+        el.textContent = step === 2 ? fmtMoney(v) : v;
+        if (k < 1 && Math.random() < 0.5) sfx.play('count');
+        if (k >= 1) { clearInterval(this.countTimer); if (step === 2) sfx.play('deliver'); }
+      }, 40);
+    }
+    if (step === 1) [1, 2, 3].forEach((i) => { if (r.stars >= i) setTimeout(() => sfx.play('star'), (0.3 + i * 0.35) * 1000); });
+    if (step === 2 && r.economy?.stageUp != null) setTimeout(() => sfx.play('combo', 5), 900);
+  }
+
+  // o dinheiro chegou do servidor enquanto o passo 2 esperava
+  resultsEconomyArrived() {
+    if (this.name === 'results' && this.res?.step === 2) this.results(this.res.r, this.res);
   }
 }

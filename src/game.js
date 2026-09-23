@@ -6,8 +6,7 @@ import { FX } from './fx.js';
 import { aiFace, buildTicketMesh } from './models.js';
 import { PLAYER_LOOKS } from './player.js';
 import { sfx } from './audio.js';
-import { save } from './save.js';
-import { LEVELS } from './levels.js';
+import { effectsOf, applyToLevel, buyBlock, priceOf, listBuilds, stageOf, UPGRADE, UPGRADE_NEEDS, hasStation, nextLevelOf, revenueMult, fmtMoney } from './economy.js';
 
 const TIP_MAX = 0.5;      // gorjeta máxima: +50% dos pontos se entregar rápido
 const EXPIRE_PENALTY = 10;
@@ -25,6 +24,7 @@ const comboMult = (n) => COMBO_TIERS[Math.min(n, COMBO_TIERS.length - 1)];
 const GOLDEN_TIME = 15;   // deploy dourado: entregas valem o dobro
 const CACHE_TIME = 12;    // cache quente: mesas rendem o dobro
 const LUCKY_TAIL = 10;    // não sorteia bênção nos últimos segundos
+const BUY_HOLD = 0.9;     // segundos segurando "usar" em cima da placa pra comprar
 const r2 = (v) => Math.round(v * 100) / 100;
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -41,11 +41,15 @@ export class Game {
   constructor(app, level, roster, role = 'local') {
     this.app = app;
     this.ui = app.ui;
-    this.level = level;
+    this.company = app.activeCompany || null;
+    this.eff = effectsOf(this.company?.upgrades);
+    this.baseLevel = level;
+    this.level = applyToLevel(level, this.eff);
+    this.cashView = this.company?.cash || 0; // caixa + o que a sprint já rendeu
     this.role = role;
     this.root = new THREE.Group();
     app.scene.add(this.root);
-    this.world = new World(level, this.root);
+    this.world = new World(level, this.root, this.company);
     this.fx = new FX(this.root);
     this.players = [];
     this.tickets = [];
@@ -101,6 +105,8 @@ export class Game {
     if (this.players.length >= 4) return null;
     const p = new Player(this.players.length, device, this.app.scene, owner);
     p.spawn(this.world.spawns[p.index]);
+    p.baseMul = this.eff.moveSpeed;
+    p.boostMul = this.eff.coffeeSpeed;
     this.players.push(p);
     if (!silent) this.emit('join', { i: p.index });
     return p;
@@ -128,6 +134,38 @@ export class Game {
       case 'shake': this.app.rig?.shake(d.a); break;
       case 'bigcount': this.ui.bigCount(d.n); break;
       case 'squash': if (this.players[d.i]) this.players[d.i].squash = 1; break;
+      case 'payout':
+        if (this.results) { this.results.economy = d; this.app.refreshResults?.(); }
+        break;
+      case 'built': {
+        if (this.isClient && this.app.hostCompany) this.app.hostCompany.builds = { ...(this.app.hostCompany.builds || {}), [d.id.slice(6)]: true };
+        const st = this.world.buildAt(d.id);
+        if (st) {
+          // quem estava em cima da placa sai pra frente da estação nova
+          const a = st.group.rotation.y;
+          for (const p of this.players) {
+            const t = this.world.toTile(p.pos);
+            if (t.x === st.tx && t.z === st.tz) p.pos.set(st.pos.x + Math.sin(a) * 0.9, 0, st.pos.z + Math.cos(a) * 0.9);
+          }
+          this.ui.addStationLabel(st);
+          this.fx.confetti(st.pos, 50);
+          this.fx.sparkle(st.pos.clone().setY(0.9), '#ffd166');
+          sfx.play('deliver');
+          this.app.rig?.shake(0.15);
+          this.ui.floatText(`🏗️ ${d.name}!`, st.pos, '#ffd166', true);
+        }
+        break;
+      }
+      case 'upgraded': {
+        if (this.isClient && this.app.hostCompany) this.app.hostCompany.upgrades = { ...d.upgrades };
+        this.world.applyUpgrades(d.upgrades);
+        this.refreshEffects(d.upgrades);
+        const pos = this.world.tileCenter(d.x ?? 7, d.z ?? 5);
+        this.fx.confetti(pos, 40);
+        sfx.play('deliver');
+        this.ui.floatText(`✨ ${d.name}!`, pos, '#ffd166', true);
+        break;
+      }
       case 'join': {
         const p = this.players[d.i];
         if (!p) break;
@@ -141,17 +179,8 @@ export class Game {
         sfx.play('end');
         this.ui.showHud(false);
         this.ui.setAlarm(false);
-        const level = this.app.levelIndex;
-        const rec = save.run({
-          level, score: d.score, stars: d.stars, delivered: d.delivered,
-          failed: d.failed, combo: d.combo, levelCount: LEVELS.length,
-        });
-        this.results = {
-          ...d, best: rec.prev, record: rec.isRecord, level, levelName: this.level.name,
-          levelBest: Math.max(rec.levelBest, d.score), unlocked: rec.unlocked,
-          unlockedName: rec.unlocked === null ? null : LEVELS[rec.unlocked].name,
-          hasNext: level + 1 < LEVELS.length,
-        };
+        this.results = { ...d, levelName: this.level.name, economy: null };
+        if (!this.isClient) this.app.onSprintEnd?.(this);
         this.fx.confetti(new THREE.Vector3(), d.stars * 40);
         break;
       }
@@ -229,7 +258,9 @@ export class Game {
       p.highlight.visible = !!p.target && !p.frozen;
       if (p.target) p.highlight.position.copy(p.target.pos);
       p.working = false;
-      if (!playing || p.frozen) continue;
+      if (p.frozen || !(playing || this.mode === 'lobby')) continue;
+      this.padInput(p, s, dt);
+      if (!playing) continue;
       if (s.pick) this.onPick(p);
       if (s.use && p.target) {
         const st = p.target;
@@ -241,6 +272,7 @@ export class Game {
       }
     }
     this.separatePlayers();
+    this.decayPads(dt);
 
     if (playing) {
       this.elapsed += dt;
@@ -356,6 +388,10 @@ export class Game {
     this.ui.updatePlayers(this.players, this.app.myId, this.role !== 'local');
     this.ui.updatePrompts(this.computePrompts());
     this.ui.updateGuides(this.computeGuides());
+    this.refreshPads();
+    const near = this.players.filter((p) => this.isMine(p) && !p.gone).map((p) => p.pos);
+    this.ui.updatePads(this.world.pads, this.mode === 'lobby' || this.mode === 'playing', near);
+    this.ui.setCash(this.cashView, this.mode === 'playing');
     this.dust(dt);
     this.ui.setAlarm(this.incident > 0 && this.mode !== 'results');
   }
@@ -387,10 +423,19 @@ export class Game {
 
   // "E Pegar · Q Trabalhar" sobre a estação mirada (só jogadores deste PC)
   computePrompts() {
-    if (this.mode !== 'playing') return [];
+    if (this.mode !== 'playing' && this.mode !== 'lobby') return [];
     const out = [];
     const waiting = this.tickets.some((t) => t.state === 'waiting');
     for (const p of this.players) {
+      const pad = this.padUnder(p);
+      if (pad && this.isMine(p) && !p.frozen && !(p.target && this.canWork(p, p.target, true))) {
+        const [, , kUse] = this.app.input.hint(p.device);
+        const kBuy = this.app.input.hint(p.device)[4];
+        const how = p.device === 'mouse' ? 'Segure p/ comprar' : 'Comprar';
+        out.push({ p, st: pad, items: pad.block ? [['🔒', pad.block]] : [[p.device === 'mouse' ? kUse : kBuy, `${how} · ${fmtMoney(pad.price)}`]] });
+        continue;
+      }
+      if (this.mode !== 'playing') continue;
       const st = p.target;
       if (!this.isMine(p) || p.frozen || !st) continue;
       const [, kPick, kUse] = this.app.input.hint(p.device);
@@ -416,6 +461,100 @@ export class Game {
       if (items.length) out.push({ p, st, items });
     }
     return out;
+  }
+
+  // ---------- tycoon: placas de compra ----------
+  get company() { return this.app.activeCompany; }
+  set company(v) { /* a empresa ativa vem do App */ }
+
+  padUnder(p) {
+    const t = this.world.toTile(p.pos);
+    return this.world.padAt(t.x, t.z);
+  }
+
+  // o que a sprint já rendeu (sem o bônus de estrelas, que só vem no fim)
+  get liveEarn() { return this.mode === 'playing' || this.mode === 'results' ? Math.round(this.score * revenueMult(this.level.stage || 0)) : 0; }
+
+  // atualiza preço, bloqueio e visibilidade de cada placa
+  refreshPads() {
+    const c = this.company;
+    const stage = c ? stageOf(c.valuation).id : 0;
+    if (!this.isClient) this.cashView = (c?.cash || 0) + this.liveEarn;
+    const builds = new Map(listBuilds(this.world.map).map((b) => ['build:' + b.id, b]));
+    for (const pad of this.world.pads) {
+      if (!c) { pad.visible = false; continue; }
+      let need;
+      if (pad.kind === 'build') need = builds.get(pad.id)?.stage ?? 0;
+      else {
+        const nx = nextLevelOf(c.upgrades || {}, pad.type);
+        need = nx?.stage ?? 9;
+        const req = UPGRADE_NEEDS[pad.type];
+        if (req && !hasStation(c, this.world.map, req)) { pad.visible = false; continue; }
+      }
+      // mostra o que dá pra comprar agora e um "gostinho" do próximo estágio
+      pad.visible = need <= stage + 1;
+      pad.price = priceOf(c, pad.id, this.world.map) ?? 0;
+      pad.block = buyBlock({ ...c, cash: this.cashView }, pad.id, this.world.map, 0);
+      pad.affordable = !pad.block;
+    }
+  }
+
+  // segurar "usar" em cima de uma placa compra (host decide; cliente só manda o input)
+  padInput(p, s, dt) {
+    const pad = this.padUnder(p);
+    if (!pad || pad.busy) return;
+    const tryBuy = () => {
+      if (pad.block) { this.sound('error'); this.say('pad' + p.index, `🔒 ${pad.block}`, pad.pos, '#ffb4b4'); return; }
+      pad.busy = true;
+      pad.hold = 1;
+      pad.touched = true;
+      this.app.purchase?.(pad, this);
+    };
+    // teclado e controle: a tecla Comprar (F / P / Num3 / Y) compra na hora
+    if (s.buy) return tryBuy();
+    // mouse de uma mão: segurar o clique em cima da placa
+    if (p.device !== 'mouse') return;
+    const working = p.target && this.canWork(p, p.target, true);
+    if (!s.use || working) return;
+    if (pad.block) {
+      if (s.usePressed) tryBuy();
+      return;
+    }
+    pad.hold += dt / BUY_HOLD;
+    pad.touched = true;
+    if (pad.hold >= 1) {
+      pad.busy = true;
+      pad.hold = 0;
+      this.app.purchase?.(pad, this);
+    }
+  }
+
+  // placas que ninguém está segurando esvaziam
+  decayPads(dt) {
+    for (const pad of this.world.pads) {
+      if (!pad.touched && pad.hold > 0) pad.hold = Math.max(0, pad.hold - dt * 2);
+      pad.touched = false;
+    }
+  }
+
+  // o servidor confirmou a compra
+  onPurchased(bought, pad) {
+    if (bought.id.startsWith('build:')) this.emit('built', { id: bought.id, name: bought.name });
+    else this.emit('upgraded', { upgrades: this.company.upgrades, name: `${bought.name} nv ${bought.level}`, x: pad?.tx, z: pad?.tz });
+    this.toast(`🛒 <b>${bought.name}</b> comprado por ${fmtMoney(bought.price)}`);
+  }
+
+  purchaseFailed(pad, msg) {
+    pad.busy = false;
+    this.sound('error');
+    this.floatAt(`⚠️ ${msg}`, pad.pos, '#ffb4b4');
+  }
+
+  // melhorias novas valem na hora (velocidade, café, chances do caos)
+  refreshEffects(upgrades) {
+    this.eff = effectsOf(upgrades);
+    this.level = applyToLevel(this.baseLevel, this.eff);
+    for (const p of this.players) { p.baseMul = this.eff.moveSpeed; p.boostMul = this.eff.coffeeSpeed; }
   }
 
   // setas mostrando onde o ticket na mão deve ir
@@ -616,7 +755,7 @@ export class Game {
 
   work(st, ps, dt) {
     // pair programming: 2 devs rendem mais que o dobro (cache quente soma em cima)
-    const rate = (ps.length === 1 ? 1 : ps.length * 1.1) * (this.cache > 0 ? 2 : 1);
+    const rate = (ps.length === 1 ? 1 : ps.length * 1.1) * (this.cache > 0 ? 2 : 1) * (st.type === 'desk' ? this.eff.codeSpeed : 1);
     st.flash = 0.2;
     ps.forEach((p) => {
       p.working = true;
@@ -625,7 +764,7 @@ export class Game {
 
     // reboot de IA / roteador
     if ((st.type === 'ai' && st.broken) || (st.type === 'router' && this.wifiDown)) {
-      st.repair += (dt * rate) / REPAIR_TIME;
+      st.repair += (dt * rate * this.eff.repairSpeed) / REPAIR_TIME;
       if (Math.random() < dt * 6) this.sound('type');
       if (st.repair >= 1) { ps.forEach((p) => p.stats.repairs++); this.fixStation(st); }
       return;
@@ -716,7 +855,7 @@ export class Game {
         }
       } else if (st.type === 'test' && t.step === 'test' && !this.wifiDown) {
         st.running = true;
-        t.progress += dt / t.work;
+        t.progress += dt / (t.work * this.eff.testTime);
         if (t.progress >= 1) this.testComplete(t, st);
       } else if (st.type === 'merge' && t.step === 'merge' && st.conflict === null) {
         st.running = true;
@@ -817,7 +956,7 @@ export class Game {
 
   drinkCoffee(p) {
     if (p.boost > 2) return;
-    p.boost = 8;
+    p.boost = this.eff.coffeeTime;
     p.stats.coffee++;
     this.emit('squash', { i: p.index });
     this.sound('coffee');
@@ -843,9 +982,10 @@ export class Game {
       this.drainT += dt;
       if (this.drainT >= DRAIN_EVERY) {
         this.drainT = 0;
-        this.score = Math.max(0, this.score - DRAIN_POINTS);
+        const drain = Math.max(1, Math.round(DRAIN_POINTS * this.eff.drainMult));
+        this.score = Math.max(0, this.score - drain);
         const sv = this.station('server');
-        if (sv) this.floatAt(`-${DRAIN_POINTS} 💸`, sv.pos, '#ff8fa3');
+        if (sv) this.floatAt(`-${drain} 💸`, sv.pos, '#ff8fa3');
       }
     }
   }
@@ -941,7 +1081,7 @@ export class Game {
       const free = this.players.filter((p) => !p.gone && p.meeting <= 0);
       if (!free.length) return;
       const p = pick(free);
-      p.meeting = this.multi ? 7 : 5;
+      p.meeting = (this.multi ? 7 : 5) * this.eff.meetingMult;
       this.sound('meeting');
       this.floatAt('📅 Reunião surpresa!', p.pos, '#8ecae6', true);
       this.toast(`📅 <b style="color:${p.color}">${p.look.name}</b> foi puxado pra uma reunião que podia ser um e-mail!`, 3500);
@@ -959,6 +1099,7 @@ export class Game {
 
   triggerProdBug(name) {
     const t = new Ticket('hotfix');
+    t.timeLimit = t.timeLeft = t.def.time * this.eff.hotfixTime;
     if (name) t.name = `Hotfix: ${name}`;
     this.tickets.unshift(t); // fura a fila do backlog
     this.incident++;
@@ -1035,12 +1176,15 @@ export class Game {
 
   // ---------- visual das estações ----------
   animateStations(dt) {
+    this.world.animatePads(dt, performance.now() / 1000);
+    this.world.updateAmbient(dt);
     const now = performance.now() / 1000;
     this.smokeT -= dt;
     const smoke = this.smokeT <= 0;
     if (smoke) this.smokeT = 0.25;
     for (const st of this.world.stations) {
       st.flash = Math.max(0, st.flash - dt);
+      if (st.spinners) for (const s of st.spinners) s.obj.rotation[s.axis] += s.speed * dt; // peças dos upgrades
       if (st.type === 'desk' && st.screenTex) {
         if (st.flash > 0) st.screenTex.offset.y += dt * 0.6;
       } else if (st.type === 'test' && st.lamp) {
@@ -1122,7 +1266,8 @@ export class Game {
       t: 'snap',
       m: this.mode, tl: r2(this.timeLeft), sc: this.score, dv: this.delivered,
       cb: this.combo, ct: r2(this.comboT), gl: r2(this.golden), ca: r2(this.cache),
-      wf: this.wifiDown ? 1 : 0, ic: this.incident,
+      wf: this.wifiDown ? 1 : 0, ic: this.incident, cv: Math.round(this.cashView),
+      ph: this.world.pads.map((p) => r2(p.hold)),
       p: this.players.map((p) => [r2(p.pos.x), r2(p.pos.z), r2(p.angle), r2(p.vel.x), r2(p.vel.z), p.working ? 1 : 0, p.holding?.id || 0, p.boost > 0 ? 1 : 0, r2(p.meeting)]),
       k: live.map((t) => [t.id, t.type, t.name, t.stepIndex, r2(t.progress), r2(t.timeLeft), t.state,
         t.holder ? (t.holder.kind === 'player' ? 'p' + t.holder.ref.index : 's' + t.holder.ref.index) : '',
@@ -1143,6 +1288,8 @@ export class Game {
       this.onModeChange(from, s.m);
     }
     this.timeLeft = s.tl; this.score = s.sc; this.delivered = s.dv;
+    if (s.cv != null) this.cashView = s.cv;
+    (s.ph || []).forEach((h, i) => { if (this.world.pads[i]) this.world.pads[i].hold = h; });
     this.combo = s.cb || 0; this.comboT = s.ct || 0;
     this.golden = s.gl || 0; this.cache = s.ca || 0;
     this.wifiDown = !!s.wf; this.incident = s.ic || 0;
@@ -1155,6 +1302,7 @@ export class Game {
       let t = this.ticketMap.get(id);
       if (!t) {
         t = new Ticket(type, { id, name });
+        if (type === 'hotfix') t.timeLimit = t.def.time * this.eff.hotfixTime; // mesmo prazo que o host
         this.ticketMap.set(id, t);
         this.tickets.push(t);
       }
@@ -1197,6 +1345,7 @@ export class Game {
     const prog = new Map((s.a || []).map(([i, v]) => [i, v]));
     s.s.forEach((f, i) => {
       const st = this.world.stations[i];
+      if (!st) return; // estação nova chega pelo evento 'built' deste mesmo pacote
       st.running = !!(f & 1);
       if (f & 2) st.flash = Math.max(st.flash, 0.2);
       st.broken = !!(f & 4);
@@ -1231,6 +1380,7 @@ export class Game {
         if (!p.frozen) {
           if (s.pick) p.net.pick++;
           if (s.usePressed) p.net.usePressed++;
+          if (s.buy) p.net.buy++;
         }
         p.net.use = s.use && !p.frozen;
       } else {
@@ -1246,8 +1396,8 @@ export class Game {
   // Cliente: pacote de input dos próprios personagens
   inputPacket() {
     const ps = this.players.filter((p) => this.isMine(p)).map((p) => {
-      const pk = [p.index, r2(p.pos.x), r2(p.pos.z), r2(p.angle), r2(p.facing.x), r2(p.facing.z), p.net.pick, p.net.use ? 1 : 0, p.net.usePressed];
-      p.net.pick = 0; p.net.usePressed = 0;
+      const pk = [p.index, r2(p.pos.x), r2(p.pos.z), r2(p.angle), r2(p.facing.x), r2(p.facing.z), p.net.pick, p.net.use ? 1 : 0, p.net.usePressed, p.net.buy];
+      p.net.pick = 0; p.net.usePressed = 0; p.net.buy = 0;
       return pk;
     });
     return ps.length ? { t: 'in', p: ps } : null;
@@ -1255,7 +1405,7 @@ export class Game {
 
   // Host: recebe input de um cliente
   applyInput(owner, pkt) {
-    for (const [i, x, z, a, fx, fz, pick, use, up] of pkt.p) {
+    for (const [i, x, z, a, fx, fz, pick, use, up, buy = 0] of pkt.p) {
       const p = this.players[i];
       if (!p || p.owner !== owner) continue;
       const n = p.net;
@@ -1264,7 +1414,7 @@ export class Game {
         p.vel.set((x - n.pos.x) * 30, 0, (z - n.pos.z) * 30).clampLength(0, 6);
       }
       n.pos.set(x, 0, z); n.angle = a; n.fx = fx; n.fz = fz; n.has = true;
-      n.pick += pick; n.usePressed += up; n.use = !!use;
+      n.pick += pick; n.usePressed += up; n.use = !!use; n.buy += buy;
     }
   }
 }

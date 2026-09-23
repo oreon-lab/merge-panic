@@ -22,17 +22,37 @@ Como funciona: o navegador do host roda a simulação. Os clientes movem o próp
 
 ## Controles
 
-| Jogador | Mover | Pegar/Soltar | Trabalhar (segurar) | Dash |
-|---|---|---|---|---|
-| Teclado 1 | WASD | E | Q | Shift esq. |
-| Teclado 2 | IJKL | O | U | H |
-| Teclado 3 | Setas | Shift dir. / . | Ctrl dir. / , | Num0 / ; |
-| Controle | Analógico/D-pad | A | X | B / RB |
-| Mouse (uma mão) | Clique esq. | Botão dir. | Clique esq. segurando | Botão do meio |
+| Jogador | Mover | Pegar/Soltar | Trabalhar (segurar) | Dash | Comprar (em cima da placa) |
+|---|---|---|---|---|---|
+| Teclado 1 | WASD | E | Q | Shift esq. | **F** |
+| Teclado 2 | IJKL | O | U | H | **P** |
+| Teclado 3 | Setas | Shift dir. / . | Ctrl dir. / , | Num0 / / | **Num3** / **;** |
+| Controle | Analógico/D-pad | A | X | B / RB | **Y** |
+| Mouse (uma mão) | Clique esq. | Botão dir. | Clique esq. segurando | Botão do meio | segurar o esquerdo |
 
 No lobby, cada jogador aperta **Pegar** para entrar (no mouse, o botão direito). **Espaço/Start** começa a sprint. **Esc** pausa.
 
 O esquema de mouse existe pra jogar com **uma mão só**: segure o esquerdo e ele anda até o cursor (o destino trava no clique, senão ele perseguiria a câmera). Se o cursor estiver numa estação, ele vai pro ponto de pé na frente dela e encara — aí é só continuar segurando pra trabalhar.
+
+## Telas e fluxo
+
+```
+Abertura → (1ª vez) Fundar empresa → HQ ⇄ painéis → Partida → Resultado (3 passos) → HQ
+```
+
+- **HQ**: o escritório 3D da sua empresa é a base. Qualquer um entra no time apertando *Pegar* e pode andar pelas placas de compra. Embaixo fica a dock: **👥 Convidar · ▶ JOGAR · 📖 Ajuda · ⚙️ Ajustes**.
+- **Painéis** abrem por cima do HQ com o mesmo layout (cabeçalho, conteúdo, rodapé). **Esc / B** sempre volta.
+- **Teclado no HQ**: o movimento é dos jogadores; **Enter** começa a próxima sprint; **Tab** (ou *Select*) foca a dock para navegar com as setas.
+- **Resultado** em 3 passos: desempenho → receita da empresa → prêmios do time.
+
+## Progressão (tycoon)
+
+- **Um escritório só, que cresce.** A empresa começa como garagem (2 mesas, 1 teste, 1 review, 1 merge) e expande com **placas de compra** no chão.
+- **Placas amarelas**: pise e aperte **Comprar** (F / P / Num3 / Y no controle). Expansões (mesa de dev, agente de IA, esteira de testes, review, merge, café) aparecem na hora com holograma de prévia; melhorias (monitores, CI turbinado, IA v2, Wi-Fi mesh...) mudam o escritório e os números da sprint.
+- **Dá pra comprar no meio da sprint** com o dinheiro que ela já rendeu (o servidor aceita até esse valor; o acerto vem no fim — desistir depois de gastar deixa a empresa no vermelho).
+- **Sem fases**: cada sprint (#1, #2, #3...) fica mais caótica conforme a empresa sobe de estágio (🏚️ Garagem → 🚀 Startup → 📈 Scale-up → 🦄 Unicórnio → 🏢 Big Tech) — e paga mais.
+- **Tudo fica salvo no servidor** (`data/db.json`): o navegador guarda só um id + token anônimo. O código da conta (em ⚙️ Ajustes) leva o progresso para outro navegador.
+- No online, a sprint usa a **empresa do host**; cada convidado ganha XP e histórico no próprio perfil.
 
 ## Como jogar
 
@@ -42,21 +62,7 @@ O esquema de mouse existe pra jogar com **uma mão só**: segure o esquerdo e el
 4. Features e projetos passam por **👀 Code Review** — ninguém revisa o próprio código.
 5. Entregue no **🔀 Merge** antes do prazo. Entregas rápidas dão gorjeta; tickets tocados por 2+ devs dão bônus de equipe.
 6. **🔥 Combo**: entregas em sequência multiplicam tudo — x1.5 → x2 → x2.5 → x3. Deixar um prazo estourar (ou jogar um ticket no lixo) esfria a sequência, e ficar 16 s sem entregar apaga a chama.
-7. **⭐ Estrelas**: a barrinha abaixo dos pontos mostra os três limites da sprint (o card do lobby diz quais são). Cruzar um deles avisa na hora, então dá pra sentir o "quase lá".
-
-## Progressão
-
-Cada sprint tem 3 estrelas. Tirar **pelo menos 1** libera a seguinte, e o jogo volta na fase mais nova quando você abre de novo. O card do lobby mostra o seletor (`◀ ▶`, ou as teclas `[` e `]`), os limites de estrela da fase e o seu melhor ali.
-
-| Fase | Tema | O que muda |
-|---|---|---|
-| ⭐ **Sprint 1 — Primeiro Dia** | onboarding | 20 demandas, caos começa aos 45 s, 4 mesas e 2 IAs |
-| ⭐⭐ **Sprint 2 — Era da IA** | mais volume | 24 demandas, 3 agentes de IA (e mais propensos a bug), só 1 merge, uma mesa a menos |
-| ⭐⭐⭐ **Sprint 3 — Deploy na Sexta** | caos máximo | 26 demandas, demanda a cada 9-14 s, caos desde os 25 s, mais conflitos e bugs escapando |
-
-Os limites de estrela de cada fase saem de um modelo que espelha a pontuação real (gorjeta + combo), por perfil de jogador: 1★ no p10 do casual, 2★ no do bom, 3★ no do excelente.
-
-O recorde, as estrelas acumuladas, a fase liberada e o som ficam salvos no navegador (`localStorage`). A tela de título mostra seu melhor resultado e o lobby guarda o melhor de cada fase.
+7. **⭐ Estrelas**: a barrinha abaixo dos pontos mostra os três limites da sprint (sobem junto com a empresa). Cruzar um deles avisa na hora, então dá pra sentir o "quase lá".
 
 ## Caos (o que pode dar errado)
 

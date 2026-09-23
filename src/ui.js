@@ -1,3 +1,5 @@
+import { icon } from './icons.js';
+const fmtMoneyUI = (v) => 'R$ ' + Math.round(v).toLocaleString('pt-BR');
 import * as THREE from 'three';
 import { STEPS } from './tickets.js';
 import { STATION_INFO } from './world.js';
@@ -22,14 +24,14 @@ export class UI {
     this.hud = h('div', 'hud hidden'); this.root.append(this.hud);
     this.orders = h('div', 'orders'); this.hud.append(this.orders);
     this.stats = h('div', 'stats', `
-      <div class="clock"><span class="ic">⏱️</span><span class="v">5:00</span></div>
+      <div class="clock"><span class="ic">${icon('clock', 26)}</span><span class="v">5:00</span></div>
       <div class="score">
-        <div class="s-row"><span class="lbl">PONTOS</span><span class="v">0</span></div>
+        <div class="s-row"><span class="lbl">Pontos</span><span class="v">0</span></div>
         <div class="goal"><div class="gbar"><i class="gfill"></i></div><div class="gmk"></div></div>
       </div>
       <div class="combo hidden"><span class="cx">x2</span><div class="ct"><i></i></div></div>
       <div class="bonus hidden"><span class="bx">💛 x2</span><div class="bt"><i></i></div></div>
-      <div class="deliv"><span class="lbl">ENTREGUES</span><span class="v">0/20</span></div>`);
+      <div class="deliv"><span class="lbl">Entregues</span><span class="v">0/20</span></div>`);
     this.hud.append(this.stats);
     this.clockEl = this.stats.querySelector('.clock');
     this.scoreEl = this.stats.querySelector('.score .v');
@@ -71,6 +73,7 @@ export class UI {
     this.tags = new Map();
     this.prompts = new Map();
     this.guides = new Map();
+    this.padEls = new Map();
   }
 
   setAlarm(on) { this.root.classList.toggle('alarm', !!on); }
@@ -342,6 +345,52 @@ export class UI {
     this.bigEl.classList.remove('show');
     void this.bigEl.offsetWidth;
     this.bigEl.classList.add('show');
+  }
+
+  // etiquetas das placas de compra (nome + preço, verde se dá pra comprar)
+  updatePads(pads, show, near = []) {
+    const seen = new Set();
+    if (show) for (const pad of pads) {
+      if (!pad.visible) continue;
+      // perto de alguém: etiqueta completa; longe: só as compráveis, em versão compacta
+      const close = near.some((p) => Math.hypot(p.x - pad.pos.x, p.z - pad.pos.z) < 2.4);
+      if (!close && !pad.affordable) continue;
+      seen.add(pad.id);
+      let el = this.padEls.get(pad.id);
+      if (!el) {
+        el = h('div', 'padlbl');
+        this.world.append(el);
+        this.padEls.set(pad.id, el);
+      }
+      const locked = !!pad.block && !pad.block.startsWith('Dinheiro');
+      const html = close
+        ? `<b>${pad.icon} ${pad.name}</b><span>${locked ? '🔒 ' + pad.block : fmtMoneyUI(pad.price)}</span>`
+        : `<i>${pad.icon}</i><span>${fmtMoneyUI(pad.price)}</span>`;
+      if (el.innerHTML !== html) el.innerHTML = html;
+      el.classList.toggle('ok', !!pad.affordable);
+      el.classList.toggle('lock', locked);
+      el.classList.toggle('mini', !close);
+      this.place(el, pad.pos.clone().add(new THREE.Vector3(0, pad.kind === 'build' ? 1.35 : 1.0, 0)));
+    }
+    for (const [k, el] of this.padEls) if (!seen.has(k)) { el.remove(); this.padEls.delete(k); }
+  }
+
+  // caixa da empresa ao vivo durante a sprint
+  setCash(v, show) {
+    if (!this.cashEl) {
+      this.cashEl = h('div', 'cash-hud');
+      this.stats.prepend(this.cashEl);
+    }
+    this.cashEl.classList.toggle('hidden', !show);
+    const r = Math.round(v);
+    if (r === this.lastCash) return;
+    if (this.lastCash != null && r > this.lastCash) {
+      this.cashEl.classList.remove('bump');
+      void this.cashEl.offsetWidth;
+      this.cashEl.classList.add('bump');
+    }
+    this.lastCash = r;
+    this.cashEl.innerHTML = `<span class="lbl">Caixa</span><span class="v ${r < 0 ? 'neg' : ''}">${fmtMoneyUI(r)}</span>`;
   }
 
   setRoom(code) {

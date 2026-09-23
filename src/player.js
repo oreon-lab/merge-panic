@@ -16,7 +16,7 @@ export class Player {
     this.index = index;
     this.device = device;
     this.owner = owner; // id de rede de quem controla (0 = host/local)
-    this.net = { pos: new THREE.Vector3(), angle: 0, fx: 0, fz: 1, pick: 0, use: false, usePressed: 0, has: false };
+    this.net = { pos: new THREE.Vector3(), angle: 0, fx: 0, fz: 1, pick: 0, use: false, usePressed: 0, buy: 0, has: false };
     this.gone = false;
     this.look = PLAYER_LOOKS[index];
     this.color = this.look.color;
@@ -38,6 +38,8 @@ export class Player {
     this.boost = 0;
     this.meeting = 0; // preso numa reunião surpresa
     this.slow = 1;
+    this.baseMul = 1;   // upgrade "Piso novo"
+    this.boostMul = 1.35; // upgrade "Café gourmet"
     this.working = false;
     this.frozen = false;
     this.t = 0;
@@ -53,7 +55,7 @@ export class Player {
     this.model.root.position.copy(p);
   }
 
-  get speedMul() { return (this.boost > 0 ? 1.35 : 1) * this.slow; }
+  get speedMul() { return (this.boost > 0 ? this.boostMul : 1) * this.slow * this.baseMul; }
 
   // move: vetor desejado no mundo (xz), já mapeado pela câmera
   update(dt, move, dashPressed, world, fx, onDash) {
@@ -133,10 +135,11 @@ export class Player {
   // Consome as ações recebidas pela rede (host)
   consumeNet() {
     const n = this.net;
-    const s = { mx: 0, my: 0, pick: n.pick > 0, use: n.use, usePressed: n.usePressed > 0, dash: false };
+    const s = { mx: 0, my: 0, pick: n.pick > 0, use: n.use, usePressed: n.usePressed > 0, dash: false, buy: n.buy > 0 };
+    if (n.buy > 0) { n.buy--; this.pos.copy(n.pos); }
     if (n.pick > 0) { n.pick--; this.pos.copy(n.pos); }
     if (n.usePressed > 0) n.usePressed--;
-    if (this.gone) { s.pick = false; s.use = false; s.usePressed = false; }
+    if (this.gone) { s.pick = false; s.use = false; s.usePressed = false; s.buy = false; }
     return s;
   }
 

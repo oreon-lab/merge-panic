@@ -26,7 +26,7 @@ export function mesh(geo, material, x = 0, y = 0, z = 0, shadow = true) {
 }
 
 // ---------- Texturas em canvas ----------
-function canvasTex(w, h, draw) {
+export function canvasTex(w, h, draw) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   draw(c.getContext('2d'), w, h);
@@ -81,7 +81,7 @@ function diffTexture() {
   return diffTex;
 }
 
-function labelTexture(text, bg, fg, w = 256, h = 96, font = 44) {
+export function labelTexture(text, bg, fg, w = 256, h = 96, font = 44) {
   return canvasTex(w, h, (g) => {
     g.fillStyle = bg; g.fillRect(0, 0, w, h);
     g.fillStyle = fg;
@@ -92,18 +92,31 @@ function labelTexture(text, bg, fg, w = 256, h = 96, font = 44) {
   });
 }
 
-export function floorTexture() {
+// tier 0: carpete bege · 1: taco de madeira · 2: porcelanato polido
+export function floorTexture(tier = 0) {
   const t = canvasTex(256, 256, (g) => {
-    const cols = ['#d9ccb4', '#cfc0a5'];
+    if (tier === 1) {
+      for (let row = 0; row < 8; row++) {
+        const off = (row % 2) * 64;
+        for (let i = -1; i < 3; i++) {
+          g.fillStyle = ['#b98352', '#a8733f', '#c48f5c'][(row + i + 3) % 3];
+          g.fillRect(i * 128 + off, row * 32, 128, 32);
+          g.strokeStyle = 'rgba(60,30,10,0.35)'; g.lineWidth = 2;
+          g.strokeRect(i * 128 + off, row * 32, 128, 32);
+        }
+      }
+      return;
+    }
+    const cols = tier === 2 ? ['#eef3f6', '#dfe8ee'] : ['#f0c49a', '#e8b384'];
     for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) {
       g.fillStyle = cols[(i + j) % 2];
       g.fillRect(i * 128, j * 128, 128, 128);
       // ruído sutil de carpete
-      for (let k = 0; k < 500; k++) {
+      for (let k = 0; k < (tier === 2 ? 60 : 500); k++) {
         g.fillStyle = `rgba(0,0,0,${Math.random() * 0.05})`;
         g.fillRect(i * 128 + Math.random() * 128, j * 128 + Math.random() * 128, 2, 2);
       }
-      g.strokeStyle = 'rgba(80,60,40,0.18)'; g.lineWidth = 2;
+      g.strokeStyle = tier === 2 ? 'rgba(90,120,140,0.25)' : 'rgba(150,90,50,0.35)'; g.lineWidth = 3;
       g.strokeRect(i * 128 + 1, j * 128 + 1, 126, 126);
     }
   });
@@ -112,7 +125,7 @@ export function floorTexture() {
 }
 
 // ---------- Peças do cenário ----------
-function counterBase(bodyColor = '#56627d', topColor = '#eef0f3') {
+function counterBase(bodyColor = '#a86b43', topColor = '#f1ede4') {
   const g = new THREE.Group();
   g.add(mesh(rbox(0.98, COUNTER_H - 0.06, 0.94, 0.05), mat(bodyColor), 0, (COUNTER_H - 0.06) / 2, 0));
   g.add(mesh(rbox(1.0, 0.07, 0.98, 0.025), mat(topColor), 0, COUNTER_H - 0.035, 0));
@@ -297,11 +310,11 @@ const POSTERS = [
   ['É SÓ UM\nCSS RAPIDINHO', '#8ecae6', '#1b1f2e'],
   ['TODO:\nfix later', '#c3a6ff', '#1b1f2e'],
 ];
-export function buildWall(tall, poster = -1) {
+export function buildWall(tall, poster = -1, wall = '#e9e3d7', trim = '#8f7f68') {
   const g = new THREE.Group();
   const h = tall ? 1.5 : 0.28;
-  g.add(mesh(rbox(1.0, h, 1.0, 0.02), mat(tall ? '#e9e3d7' : '#cfc7b8'), 0, h / 2, 0, tall));
-  g.add(mesh(rbox(1.02, 0.07, 1.02, 0.02), mat('#8f7f68'), 0, h, 0, false));
+  g.add(mesh(rbox(1.0, h, 1.0, 0.02), mat(tall ? wall : '#cfc7b8'), 0, h / 2, 0, tall));
+  g.add(mesh(rbox(1.02, 0.07, 1.02, 0.02), mat(trim), 0, h, 0, false));
   if (tall && poster >= 0) {
     const [txt, bg, fg] = POSTERS[poster % POSTERS.length];
     const p = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.44), new THREE.MeshStandardMaterial({ map: labelTexture(txt, bg, fg, 256, 180, 30), roughness: 0.8 }));

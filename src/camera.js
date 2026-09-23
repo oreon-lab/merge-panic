@@ -98,7 +98,7 @@ export class CameraRig {
     let cy = this.cur.y + offY * upp;
 
     // não mostra muito além do escritório
-    const b = this.bounds, pad = 0.8;
+    const b = this.bounds, pad = 3;
     const visL = cx - halfW + (L.left * upp), visR = cx + halfW - (L.right * upp);
     const visT = cy + halfH - (L.top * upp), visB = cy - halfH + (L.bottom * upp);
     if (visR - visL < b.maxX - b.minX + pad * 2) {
