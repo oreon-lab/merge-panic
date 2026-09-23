@@ -7,7 +7,8 @@ kbd { font-family: 'JetBrains Mono', monospace; font-size: 0.8em; background: #f
 
 /* ---------- camada do mundo ---------- */
 .world-layer { position: absolute; inset: 0; overflow: hidden; }
-.slabel { position: absolute; left: 0; top: 0; font-size: 12px; font-weight: 600; padding: 2px 8px 2px 5px; border-radius: 99px; background: rgba(20, 24, 40, 0.55); color: #e8ecf8; white-space: nowrap; display: flex; gap: 4px; align-items: center; backdrop-filter: blur(2px); }
+.slabel { position: absolute; left: 0; top: 0; font-size: 12px; font-weight: 600; padding: 2px 8px 2px 5px; border-radius: 99px; background: rgba(20, 24, 40, 0.55); color: #e8ecf8; white-space: nowrap; display: flex; gap: 4px; align-items: center; backdrop-filter: blur(2px); transition: opacity 0.18s; }
+.slabel.hd { opacity: 0; }
 .slabel.s-merge { background: rgba(34, 196, 106, 0.85); color: #fff; }
 .slabel.s-backlog { background: rgba(107, 79, 138, 0.85); }
 .slabel.s-test { background: rgba(47, 125, 109, 0.85); }
@@ -51,7 +52,7 @@ kbd { font-family: 'JetBrains Mono', monospace; font-size: 0.8em; background: #f
 @keyframes cardShake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-2px) rotate(-0.6deg); } 75% { transform: translateX(2px) rotate(0.6deg); } }
 @keyframes pulse { 50% { box-shadow: 0 0 0 4px #ffc93c; } }
 
-.stats { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.stats { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; gap: 14px; align-items: flex-end; }
 .stats > div { background: rgba(20, 24, 40, 0.85); border-radius: 14px; padding: 6px 14px; display: flex; align-items: center; gap: 10px; box-shadow: 0 4px 0 rgba(0,0,0,0.3); }
 .stats .clock { font-family: 'JetBrains Mono', monospace; font-size: 34px; font-weight: 700; }
 .stats .clock .ic { font-size: 24px; }

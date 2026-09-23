@@ -47,10 +47,12 @@ export class UI {
     this.bannerEl = h('div', 'banner'); this.root.append(this.bannerEl);
     this.bigEl = h('div', 'bigcount'); this.root.append(this.bigEl);
     this.roomEl = h('div', 'room-chip hidden'); this.hud.append(this.roomEl);
-    this.hud.append(h('div', 'hud-help', '<kbd>Esc</kbd> pausar · <kbd>M</kbd> som'));
+    this.helpEl = h('div', 'hud-help', '<kbd>Esc</kbd> pausar · <kbd>M</kbd> som');
+    this.hud.append(this.helpEl);
     this.cards = new Map();
     this.labels = []; // { el, pos: Vector3 | () => Vector3 }
     this.badges = new Map();
+    this.queue = [];  // elementos de mundo a posicionar no passe de layout
     this.v = new THREE.Vector3();
   }
 
@@ -62,6 +64,59 @@ export class UI {
   place(el, p, dy = 0) {
     const s = this.project(p);
     el.style.transform = `translate(${s.x}px, ${s.y + dy}px) translate(-50%, -100%)`;
+  }
+
+  // ---------- passe de layout dos elementos de mundo ----------
+  // Rótulo, alerta, dica, seta e placa de compra vivem todos acima da mesma
+  // estação. Com deslocamento fixo eles se cobriam (e os de estações vizinhas
+  // também). Aqui eles entram numa fila e sobem até parar de colidir.
+  put(el, pos, prio = 3, dx = 0, fade = false) {
+    this.queue.push({ el, pos: pos.clone(), prio, dx, fade });
+  }
+
+  cruza(a, b, m = 2) {
+    return !(a.x + a.w - m <= b.x || b.x + b.w - m <= a.x || a.y + a.h - m <= b.y || b.y + b.h - m <= a.y);
+  }
+
+  // painéis fixos do HUD, que os elementos de mundo não devem invadir
+  hudRects() {
+    const out = [];
+    for (const el of [this.orders, this.stats, this.helpEl, this.roomEl]) {
+      if (!el || el.classList.contains('hidden')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) out.push({ x: r.x, y: r.y, w: r.width, h: r.height });
+    }
+    return out;
+  }
+
+  layoutWorld() {
+    const fila = this.queue;
+    this.queue = [];
+    if (!fila.length) return;
+    // leitura em lote (uma ida ao layout) antes de escrever qualquer transform
+    for (const it of fila) { it.w = it.el.offsetWidth; it.h = it.el.offsetHeight; }
+    const fixos = this.hudRects();
+    const postos = [];
+    fila.sort((a, b) => a.prio - b.prio);   // quem tem prioridade fica mais perto
+    for (const it of fila) {
+      const s = this.project(it.pos);
+      const x = s.x + it.dx;
+      let y = s.y;
+      let r = { x: x - it.w / 2, y: y - it.h, w: it.w, h: it.h };
+      for (let guarda = 0; guarda < 14; guarda++) {
+        const bate = postos.find((o) => this.cruza(r, o));
+        if (!bate) break;
+        y = bate.y - 4;
+        r = { x: x - it.w / 2, y: y - it.h, w: it.w, h: it.h };
+      }
+      if (r.y < 4) { r.y = 4; y = 4 + it.h; }
+      // etiqueta fixa sob um painel do HUD não informa nada: some em vez de
+      // aparecer cortada por baixo do painel
+      if (it.fade && fixos.some((o) => this.cruza(r, o, 0))) it.el.classList.add('hd');
+      else if (it.fade) it.el.classList.remove('hd');
+      it.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
+      postos.push(r);
+    }
   }
 
   clearWorld() {
@@ -97,7 +152,7 @@ export class UI {
       const bp = el.lastChild;
       bp.style.display = a.prog ? 'block' : 'none';
       if (a.prog) bp.firstChild.style.width = `${Math.min(100, a.prog * 100)}%`;
-      this.place(el, a.st.pos.clone().add(new THREE.Vector3(0, a.st.type === 'server' ? 2.3 : 1.9, 0)));
+      this.put(el, a.st.pos.clone().add(new THREE.Vector3(0, a.st.type === 'server' ? 2.3 : 1.9, 0)), 5);
     }
     for (const [k, el] of this.alerts) if (!seen.has(k)) { el.remove(); this.alerts.delete(k); }
   }
@@ -154,14 +209,14 @@ export class UI {
   }
 
   updateWorld(tickets) {
-    for (const l of this.labels) this.place(l.el, l.pos);
+    for (const l of this.labels) this.put(l.el, l.pos, 3, 0, true);
     const tmp = new THREE.Vector3();
     for (const t of tickets) {
       if (t.state !== 'active' || !t.mesh) continue;
       const b = this.badgeFor(t);
       t.mesh.getWorldPosition(tmp);
       tmp.y += 0.35;
-      this.place(b, tmp);
+      this.put(b, tmp, 0);
       const sd = t.stepDef;
       const icon = t.conflict ? '⚔️' : sd ? sd.icon : '✅';
       const bi = b.firstChild;
@@ -315,7 +370,7 @@ export class UI {
       const html = pr.items.map(([k, txt]) => `<span><kbd>${k}</kbd>${txt}</span>`).join('');
       if (el.innerHTML !== html) el.innerHTML = html;
       el.style.setProperty('--c', pr.p.color);
-      this.place(el, pr.st.pos.clone().add(new THREE.Vector3(0, 0.95, 0.35)));
+      this.put(el, pr.st.pos.clone().add(new THREE.Vector3(0, 0.95, 0.35)), 1);
     }
     for (const [k, el] of this.prompts) if (!seen.has(k)) { el.remove(); this.prompts.delete(k); }
   }
@@ -333,8 +388,7 @@ export class UI {
         this.world.append(el);
         this.guides.set(key, el);
       }
-      el.style.marginLeft = `${g.slot * 18}px`;
-      this.place(el, g.st.pos.clone().add(new THREE.Vector3(0, 1.75, 0)));
+      this.put(el, g.st.pos.clone().add(new THREE.Vector3(0, 1.75, 0)), 4, g.slot * 18, true);
     }
     for (const [k, el] of this.guides) if (!seen.has(k)) { el.remove(); this.guides.delete(k); }
   }
@@ -381,7 +435,7 @@ export class UI {
       el.classList.toggle('ok', !!pad.affordable);
       el.classList.toggle('lock', locked);
       el.classList.toggle('mini', !close);
-      this.place(el, pad.pos.clone().add(new THREE.Vector3(0, pad.kind === 'build' ? 1.35 : 1.0, 0)));
+      this.put(el, pad.pos.clone().add(new THREE.Vector3(0, pad.kind === 'build' ? 1.35 : 1.0, 0)), 2);
     }
     for (const [k, el] of this.padEls) if (!seen.has(k)) { el.remove(); this.padEls.delete(k); }
   }

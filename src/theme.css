@@ -211,6 +211,28 @@ code.acct { background: #fff; color: var(--ink); border: 3px solid var(--ink); }
 .hq-coinfo .sb-track { height: 12px; }
 
 /* ---------- HUD da partida ---------- */
+/* Ordem de pintura do #ui, explícita. Antes ela vinha só da ordem do DOM, e
+   bastava um z-index solto numa camada pra ela virar do avesso — foi o que
+   aconteceu quando as anotações de mundo ganharam z-index e passaram a cobrir
+   o toast. O world-layer abre um contexto próprio pra escada de dentro dele
+   (estação embaixo, jogador em cima) não escapar pra fora. */
+.world-layer { z-index: 1; }
+.hud { z-index: 2; }
+.toast { z-index: 3; }
+.banner { z-index: 4; }
+.bigcount { z-index: 5; }
+.screen { z-index: 6; }
+
+/* dentro da camada de mundo: o que pertence ao jogador fica por cima do que
+   pertence à estação, quando o passe de layout não conseguiu separar */
+.slabel { z-index: 1; }
+.padlbl { z-index: 2; }
+.badge { z-index: 3; }
+.guide { z-index: 4; }
+.alert { z-index: 5; }
+.ptag { z-index: 6; }
+.bubble { z-index: 7; }
+
 /* pedidos = tickets de papel presos com fita */
 .orders { top: 18px; gap: 14px; }
 .card { background: var(--paper); border: 4px solid var(--ink); border-radius: 14px; box-shadow: 0 6px 0 var(--ink); overflow: visible; font-family: var(--body); position: relative; }

@@ -392,6 +392,7 @@ export class Game {
     const near = this.players.filter((p) => this.isMine(p) && !p.gone).map((p) => p.pos);
     this.ui.updatePads(this.world.pads, this.mode === 'lobby' || this.mode === 'playing', near);
     this.ui.setCash(this.cashView, this.mode === 'playing');
+    this.ui.layoutWorld();   // resolve as colisões dos elementos de mundo
     this.dust(dt);
     this.ui.setAlarm(this.incident > 0 && this.mode !== 'results');
   }
