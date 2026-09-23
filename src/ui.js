@@ -89,6 +89,8 @@ export class UI {
     return out;
   }
 
+  caixa(x, y, it) { return { x: x - it.w / 2, y: y - it.h, w: it.w, h: it.h }; }
+
   layoutWorld() {
     const fila = this.queue;
     this.queue = [];
@@ -102,16 +104,22 @@ export class UI {
       const s = this.project(it.pos);
       const x = s.x + it.dx;
       let y = s.y;
-      let r = { x: x - it.w / 2, y: y - it.h, w: it.w, h: it.h };
-      for (let guarda = 0; guarda < 14; guarda++) {
+      let r = this.caixa(x, y, it);
+      // sobe enquanto bater em outro elemento de mundo já posicionado
+      for (let g = 0; g < 12; g++) {
         const bate = postos.find((o) => this.cruza(r, o));
         if (!bate) break;
         y = bate.y - 4;
-        r = { x: x - it.w / 2, y: y - it.h, w: it.w, h: it.h };
+        r = this.caixa(x, y, it);
       }
-      if (r.y < 4) { r.y = 4; y = 4 + it.h; }
-      // etiqueta fixa sob um painel do HUD não informa nada: some em vez de
-      // aparecer cortada por baixo do painel
+      if (r.y < 4) { r.y = 4; y = 4 + it.h; r = this.caixa(x, y, it); }
+      // e sai por baixo de qualquer painel do HUD: um alerta escondido atrás do
+      // placar não serve pra nada. Esta é a última palavra, então o invariante
+      // "nada de mundo sob um painel" vale sempre.
+      const painel = fixos.find((o) => this.cruza(r, o, 0));
+      if (painel) { y = painel.y + painel.h + 6 + it.h; r = this.caixa(x, y, it); }
+      // etiqueta fixa que ainda assim ficaria sob um painel: some, em vez de
+      // aparecer cortada
       if (it.fade && fixos.some((o) => this.cruza(r, o, 0))) it.el.classList.add('hd');
       else if (it.fade) it.el.classList.remove('hd');
       it.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
