@@ -7,6 +7,7 @@ import { aiFace, buildTicketMesh } from './models.js';
 import { PLAYER_LOOKS } from './player.js';
 import { sfx } from './audio.js';
 import { save } from './save.js';
+import { LEVELS } from './levels.js';
 
 const TIP_MAX = 0.5;      // gorjeta máxima: +50% dos pontos se entregar rápido
 const EXPIRE_PENALTY = 10;
@@ -20,6 +21,10 @@ const DRAIN_POINTS = 3;
 const COMBO_WINDOW = 16;  // segundos para manter a chama acesa
 const COMBO_TIERS = [1, 1, 1.5, 2, 2.5, 3];  // índice = nº de entregas seguidas
 const comboMult = (n) => COMBO_TIERS[Math.min(n, COMBO_TIERS.length - 1)];
+// bênçãos (o contrapeso do caos)
+const GOLDEN_TIME = 15;   // deploy dourado: entregas valem o dobro
+const CACHE_TIME = 12;    // cache quente: mesas rendem o dobro
+const LUCKY_TAIL = 10;    // não sorteia bênção nos últimos segundos
 const r2 = (v) => Math.round(v * 100) / 100;
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
@@ -61,6 +66,7 @@ export class Game {
     this.ended = false;
     this.countdown = 0;
     this.msgCd = new Map();
+    this._tmp = new THREE.Vector3();   // rascunho pra conversão de coordenadas
     this.outbox = [];
     // caos
     this.wifiDown = false;
@@ -69,6 +75,9 @@ export class Game {
     this.lastMergeAt = -99;
     this.pendingProd = [];   // bugs que escaparam e vão estourar em produção
     this.evNext = {};
+    this.lkNext = {};        // próximas bênçãos
+    this.golden = 0;         // segundos restantes de deploy dourado
+    this.cache = 0;          // segundos restantes de cache quente
     this.smokeT = 0;
     this.ui.clearWorld();
     this.ui.setAlarm(false);
@@ -132,8 +141,17 @@ export class Game {
         sfx.play('end');
         this.ui.showHud(false);
         this.ui.setAlarm(false);
-        const rec = save.run({ score: d.score, stars: d.stars, delivered: d.delivered, failed: d.failed, combo: d.combo });
-        this.results = { ...d, best: rec.prev, record: rec.isRecord };
+        const level = this.app.levelIndex;
+        const rec = save.run({
+          level, score: d.score, stars: d.stars, delivered: d.delivered,
+          failed: d.failed, combo: d.combo, levelCount: LEVELS.length,
+        });
+        this.results = {
+          ...d, best: rec.prev, record: rec.isRecord, level, levelName: this.level.name,
+          levelBest: Math.max(rec.levelBest, d.score), unlocked: rec.unlocked,
+          unlockedName: rec.unlocked === null ? null : LEVELS[rec.unlocked].name,
+          hasNext: level + 1 < LEVELS.length,
+        };
         this.fx.confetti(new THREE.Vector3(), d.stars * 40);
         break;
       }
@@ -158,10 +176,15 @@ export class Game {
     this.lastCount = 4;
     this.enterMatchUI();
     this.players.forEach((p, i) => p.spawn(this.world.spawns[i]));
-    // agenda os eventos de caos
+    // agenda o caos e as bênçãos, escalonando as primeiras ocorrências
     const lv = this.level;
-    for (const [k, [a, b]] of Object.entries(lv.events || {})) {
-      this.evNext[k] = (lv.firstEventAt ?? 40) + rand(0, b - a) + Object.keys(this.evNext).length * 15;
+    this.schedule(this.evNext, lv.events, lv.firstEventAt ?? 40, 15);
+    this.schedule(this.lkNext, lv.lucky, lv.firstLuckyAt ?? 30, 12);
+  }
+
+  schedule(next, table, firstAt, gap) {
+    for (const [k, [a, b]] of Object.entries(table || {})) {
+      next[k] = firstAt + rand(0, b - a) + Object.keys(next).length * gap;
     }
   }
 
@@ -228,6 +251,7 @@ export class Game {
       this.updateEvents(dt);
       this.timeLeft -= dt;
       this.checkStars();
+      this.updateLucky(dt);
       const sec = Math.ceil(this.timeLeft);
       if (sec <= 10 && sec > 0 && sec !== this.lastSec) {
         this.lastSec = sec;
@@ -253,15 +277,73 @@ export class Game {
   }
 
   moveLocal(p, s, dt) {
-    const cam = this.app.camBasis;
-    const move = new THREE.Vector3().addScaledVector(cam.right, s.mx).addScaledVector(cam.up, s.my);
+    const move = new THREE.Vector3();
+    if (s.aim) {
+      // mouse de uma mão: apontar pra uma estação = encarar ela e ir pro ponto
+      // de pé na frente (é assim que se trabalha). Chão solto: anda até lá.
+      const st = this.stationAt(s.aim);
+      if (st && st.pos.distanceTo(p.pos) < 1.6) {
+        p.facing.set(st.pos.x - p.pos.x, 0, st.pos.z - p.pos.z).normalize();
+      }
+      const alvo = st ? this.standSpot(st, p.pos) : this.groundNear(s.aim, p.pos);
+      const dx = alvo.x - p.pos.x, dz = alvo.z - p.pos.z;
+      const len = Math.hypot(dx, dz);
+      if (len > 0.3) move.set(dx / len, 0, dz / len);
+    } else {
+      const cam = this.app.camBasis;
+      move.addScaledVector(cam.right, s.mx).addScaledVector(cam.up, s.my);
+    }
     p.update(dt, move, s.dash, this.world, this.fx, () => sfx.play('dash'));
   }
 
+  stationAt(pt) {
+    const t = this.world.toTile(this._tmp.set(pt.x, 0, pt.z));
+    return this.world.tile(t.x, t.z)?.station || null;
+  }
+
+  // ponto de pé em frente à estação, pelo lado mais perto do jogador: 0.85 do
+  // centro, dentro do alcance de interação (1.35) com folga
+  standSpot(st, from) {
+    const c = this.groundNear(st.pos, from);
+    const dx = c.x - st.pos.x, dz = c.z - st.pos.z;
+    const len = Math.hypot(dx, dz) || 1;
+    const fora = new THREE.Vector3(st.pos.x + (dx / len) * 0.85, 0, st.pos.z + (dz / len) * 0.85);
+    const t = this.world.toTile(fora);
+    return this.world.isSolid(t.x, t.z) ? c : fora;
+  }
+
+  // clique em cima de estação/parede não é lugar de ficar em pé: mira o chão
+  // mais próximo do jogador, senão ele escorrega pela lateral e perde o alvo
+  groundNear(pt, from) {
+    const w = this.world;
+    const t = w.toTile(this._tmp.set(pt.x, 0, pt.z));
+    if (!w.isSolid(t.x, t.z)) return pt;
+    let best = null, bestD = Infinity;
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      if (w.isSolid(t.x + dx, t.z + dz)) continue;
+      const c = w.tileCenter(t.x + dx, t.z + dz);
+      const d = (c.x - from.x) ** 2 + (c.z - from.z) ** 2;
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    return best || pt;
+  }
+
   hudStats() {
-    this.ui.setStats(this.timeLeft, this.score, this.delivered, this.level.maxOrders, this.level.stars, {
-      mult: comboMult(this.combo), t: this.comboT, window: COMBO_WINDOW,
+    this.ui.setStats(this.timeLeft, this.score, this.delivered, this.level.maxOrders, {
+      stars: this.level.stars,
+      combo: { mult: comboMult(this.combo), t: this.comboT, window: COMBO_WINDOW },
+      bonus: this.bonusInfo(),
     });
+  }
+
+  // bônus ativo (deploy dourado / cache quente) pro HUD
+  bonusInfo() {
+    const bs = [];
+    if (this.golden > 0) bs.push({ ic: '💛', t: this.golden, w: GOLDEN_TIME });
+    if (this.cache > 0) bs.push({ ic: '⚡', t: this.cache, w: CACHE_TIME });
+    if (!bs.length) return null;
+    const soonest = bs.reduce((a, b) => (b.t < a.t ? b : a));
+    return { text: `${bs.map((b) => b.ic).join('')} x2`, t: soonest.t, window: soonest.w };
   }
 
   updateUI(dt = 0) {
@@ -533,8 +615,8 @@ export class Game {
   }
 
   work(st, ps, dt) {
-    // pair programming: 2 devs rendem mais que o dobro
-    const rate = ps.length === 1 ? 1 : ps.length * 1.1;
+    // pair programming: 2 devs rendem mais que o dobro (cache quente soma em cima)
+    const rate = (ps.length === 1 ? 1 : ps.length * 1.1) * (this.cache > 0 ? 2 : 1);
     st.flash = 0.2;
     ps.forEach((p) => {
       p.working = true;
@@ -696,7 +778,8 @@ export class Game {
     this.comboBest = Math.max(this.comboBest, this.combo);
     this.comboT = COMBO_WINDOW;
     const mult = comboMult(this.combo);
-    const gain = Math.round((base + tip + team) * mult);
+    const gold = this.golden > 0 ? 2 : 1;   // deploy dourado
+    const gain = Math.round((base + tip + team) * mult * gold);
     this.score += gain;
     this.delivered++;
     this.lastMergeAt = this.elapsed;
@@ -707,7 +790,7 @@ export class Game {
       this.emit('celebrate', { i });
     });
     this.sound('deliver');
-    this.floatAt(`+${gain}${team ? ' 🤝' : ''}`, st.pos, '#6ee7a0', true);
+    this.floatAt(`+${gain}${team ? ' 🤝' : ''}${gold > 1 ? ' 💛x2' : ''}`, st.pos, '#6ee7a0', true);
     if (team) this.toast(`🤝 Trabalho em equipe! <b>+${TEAM_BONUS}</b> — ${t.touchers.size} devs no ticket "${t.name}"`);
     this.emit('confetti', { x: st.pos.x, z: st.pos.z, n: Math.min(90, 40 + (mult - 1) * 24) });
     if (mult > prevMult) {
@@ -905,6 +988,51 @@ export class Game {
     }
   }
 
+  // ---------- bênçãos ----------
+  updateLucky(dt) {
+    if (this.golden > 0) this.golden = Math.max(0, this.golden - dt);
+    if (this.cache > 0) this.cache = Math.max(0, this.cache - dt);
+    if (this.timeLeft < LUCKY_TAIL) return;
+    for (const k of Object.keys(this.lkNext)) {
+      if (this.elapsed < this.lkNext[k]) continue;
+      const [a, b] = this.level.lucky[k];
+      this.lkNext[k] = this.elapsed + rand(a, b);
+      this.fireLucky(k);
+    }
+  }
+
+  // onde o ticket está agora: mão de alguém, uma estação, ou o backlog
+  holderPos(t) {
+    const h = t.holder;
+    if (h?.kind === 'player' || h?.kind === 'station') return h.ref.pos;
+    return this.station('backlog')?.pos || new THREE.Vector3();
+  }
+
+  fireLucky(k) {
+    if (k === 'golden') {
+      this.golden = GOLDEN_TIME;
+      this.sound('star');
+      const st = this.station('merge');
+      this.emit('banner', { text: '💛 DEPLOY DOURADO', sub: `entregas em dobro por ${GOLDEN_TIME}s`, ms: 2000 });
+      if (st) this.emit('confetti', { x: st.pos.x, z: st.pos.z, n: 40 });
+    } else if (k === 'cache') {
+      this.cache = CACHE_TIME;
+      this.sound('fixed');
+      this.emit('banner', { text: '⚡ CACHE QUENTE', sub: `mesas em dobro por ${CACHE_TIME}s`, ms: 1800 });
+    } else if (k === 'intern') {
+      // o estagiário fecha de graça a etapa de um ticket que está em andamento
+      const cands = this.tickets.filter((t) => t.state === 'active' && t.stepIndex < t.steps.length - 1 &&
+        (t.step === 'code' || t.step === 'fix' || t.step === 'review'));
+      if (!cands.length) return;
+      const t = pick(cands);
+      const done = t.stepDef;
+      t.progress = 0;
+      this.completeStep(t, { pos: this.holderPos(t) }, `🧑‍🎓 Estagiário: ${done.label}!`);
+      this.sound('robot');
+      this.toast(`🧑‍🎓 O estagiário fechou <b>${done.icon} ${done.label}</b> de "${t.name}" — de graça!`);
+    }
+  }
+
   // ---------- visual das estações ----------
   animateStations(dt) {
     const now = performance.now() / 1000;
@@ -993,7 +1121,7 @@ export class Game {
     const snap = {
       t: 'snap',
       m: this.mode, tl: r2(this.timeLeft), sc: this.score, dv: this.delivered,
-      cb: this.combo, ct: r2(this.comboT),
+      cb: this.combo, ct: r2(this.comboT), gl: r2(this.golden), ca: r2(this.cache),
       wf: this.wifiDown ? 1 : 0, ic: this.incident,
       p: this.players.map((p) => [r2(p.pos.x), r2(p.pos.z), r2(p.angle), r2(p.vel.x), r2(p.vel.z), p.working ? 1 : 0, p.holding?.id || 0, p.boost > 0 ? 1 : 0, r2(p.meeting)]),
       k: live.map((t) => [t.id, t.type, t.name, t.stepIndex, r2(t.progress), r2(t.timeLeft), t.state,
@@ -1016,6 +1144,7 @@ export class Game {
     }
     this.timeLeft = s.tl; this.score = s.sc; this.delivered = s.dv;
     this.combo = s.cb || 0; this.comboT = s.ct || 0;
+    this.golden = s.gl || 0; this.cache = s.ca || 0;
     this.wifiDown = !!s.wf; this.incident = s.ic || 0;
 
     // tickets

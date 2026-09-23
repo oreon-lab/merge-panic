@@ -32,7 +32,7 @@ class App {
     this.camBasis = { right: this.rig.groundRight, up: this.rig.groundUp };
     this.setupLights();
 
-    this.input = new Input();
+    this.input = new Input(this.camera, this.canvas);
     this.input.onAnyInput(() => sfx.unlock());
     this.ui = new UI(this.camera, this.canvas);
     this.screens = new Screens(document.getElementById('ui'));
@@ -47,7 +47,7 @@ class App {
     this.peers = new Set();
     this.onlineState = {};
 
-    this.levelIndex = 0;
+    this.levelIndex = Math.min(save.unlocked, LEVELS.length - 1); // volta na fase mais nova
     this.roster = []; // [{ owner, device }]
     this.screen = 'title';
     sfx.muted = save.muted;
@@ -135,6 +135,8 @@ class App {
     } else if (s === 'lobby') {
       if (a === 'back') { this.leaveOnline(); this.roster = []; this.newGame(); this.goto('title'); }
       if (a === 'start') this.tryStart();
+      if (a === 'prevLevel') this.cycleLevel(-1);
+      if (a === 'nextLevel') this.cycleLevel(1);
       if (a === 'copy') {
         navigator.clipboard?.writeText(this.screens.link).then(() => this.ui.toast('📋 Link copiado! Manda pros amigos.'));
       }
@@ -162,6 +164,21 @@ class App {
     const g = this.game;
     if (g.mode !== 'lobby' || !g.players.length || this.role === 'client') return;
     g.start();
+  }
+
+  // troca de fase no lobby (só o host; clientes seguem o que ele mandar)
+  cycleLevel(d) {
+    if (this.role === 'client') return;
+    const next = this.levelIndex + d;
+    if (next < 0 || next >= LEVELS.length) return;
+    if (next > save.unlocked) {
+      sfx.play('error');
+      this.ui.toast(`🔒 Termine a ${LEVELS[this.levelIndex].name.split(' — ')[0]} com pelo menos ⭐ 1 pra liberar`, 2800);
+      return;
+    }
+    this.levelIndex = next;
+    sfx.play('nav');
+    this.newGame();   // reconstrói a fase e reavisa os clientes
   }
 
   showTitle() {
@@ -197,7 +214,12 @@ class App {
       level: this.game.level, players: this.game.players, myId: this.myId, role: this.role, code,
       link: code ? `${location.origin}${location.pathname}?sala=${code}` : '',
       peers: this.peers.size + 1,
-      freeDevices: Object.keys(KB_SCHEMES).filter((d) => !mine.includes(d)),
+      freeDevices: [...Object.keys(KB_SCHEMES), 'mouse'].filter((d) => !mine.includes(d)),
+      index: this.levelIndex,
+      count: LEVELS.length,
+      locked: this.levelIndex > save.unlocked,
+      best: save.bestOf(this.levelIndex),
+      starsBest: save.starsOf(this.levelIndex),
     });
   }
 
@@ -375,6 +397,8 @@ class App {
       this.screens.handle(inp.menu);
     } else if (g.mode === 'lobby') {
       this.screens.handle({ back: inp.menu.back }); // Esc volta; o resto é dos jogadores
+      if (inp.globalPressed('BracketRight')) this.cycleLevel(1);
+      if (inp.globalPressed('BracketLeft')) this.cycleLevel(-1);
       for (const d of inp.devices()) {
         if (!inp.get(d).pick) continue;
         const mine = this.roster.some((r) => r.owner === this.myId && r.device === d);

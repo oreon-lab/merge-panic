@@ -10,6 +10,9 @@ const DEF = {
   failed: 0,      // tickets perdidos (vida toda)
   stars: 0,       // estrelas acumuladas
   muted: false,
+  unlocked: 0,    // maior índice de fase liberado
+  levelBest: {},  // índice da fase -> melhor pontuação
+  levelStars: {}, // índice da fase -> melhor contagem de estrelas
 };
 
 let data = null;
@@ -41,9 +44,12 @@ export const save = {
   get stars() { return load().stars; },
   get muted() { return load().muted; },
   set muted(v) { load().muted = !!v; flush(); },
+  get unlocked() { return load().unlocked; },
+  bestOf(level) { return load().levelBest[level] || 0; },
+  starsOf(level) { return load().levelStars[level] || 0; },
 
-  // Registra o resultado de uma sprint. Retorna { prev, isRecord }.
-  run({ score = 0, stars = 0, delivered = 0, failed = 0, combo = 0 } = {}) {
+  // Registra o resultado de uma sprint. Retorna { prev, isRecord, levelBest, unlocked }.
+  run({ level = 0, score = 0, stars = 0, delivered = 0, failed = 0, combo = 0, levelCount = 1 } = {}) {
     const d = load();
     const prev = d.best;
     d.best = Math.max(prev, score);
@@ -52,8 +58,17 @@ export const save = {
     d.delivered += delivered;
     d.failed += failed;
     d.stars += stars;
+    const levelBest = d.levelBest[level] || 0;
+    d.levelBest[level] = Math.max(levelBest, score);
+    d.levelStars[level] = Math.max(d.levelStars[level] || 0, stars);
+    // passar de fase exige pelo menos 1 estrela
+    let unlocked = null;
+    if (stars >= 1 && level + 1 < levelCount && d.unlocked < level + 1) {
+      d.unlocked = level + 1;
+      unlocked = level + 1;
+    }
     flush();
-    return { prev, isRecord: score > prev && score > 0 };
+    return { prev, isRecord: score > prev && score > 0, levelBest, unlocked };
   },
 
   wipe() {

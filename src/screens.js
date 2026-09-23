@@ -1,5 +1,5 @@
 // Telas de menu (título, online, como jogar, lobby, pausa, resultados).
-import { KB_SCHEMES, PAD_HINT } from './input.js';
+import { KB_SCHEMES, PAD_HINT, MOUSE_HINT, DEVICE_LABEL } from './input.js';
 import { PLAYER_LOOKS } from './player.js';
 import { sfx } from './audio.js';
 
@@ -9,6 +9,7 @@ const h = (tag, cls, html) => {
   if (html != null) e.innerHTML = html;
   return e;
 };
+const hintOf = (device) => (device === 'mouse' ? MOUSE_HINT : device?.startsWith('gp') ? PAD_HINT : KB_SCHEMES[device]?.hint || PAD_HINT);
 const letters = (txt, cls) => [...txt].map((c, i) => `<span class="${cls}" style="--i:${i}">${c}</span>`).join('');
 const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -178,13 +179,15 @@ export class Screens {
               <li>🔥 <b>Combo</b>: entregue em sequência e os pontos multiplicam até <b>x3</b>. Deixar um prazo estourar esfria tudo.</li>
               <li>⭐ As estrelas aparecem na barrinha de pontos — dá pra ver o próximo marco durante a sprint.</li>
               <li>☕ Café deixa você mais rápido por alguns segundos.</li>
+              <li>🖱️ Dá pra jogar de <b>uma mão só</b>: segure o clique esquerdo pra andar até o cursor (e trabalhar, se parar numa estação), botão direito pra pegar/soltar, meio pro dash.</li>
               <li>🗑️ Won't fix descarta um ticket impossível (com penalidade).</li>
             </ul>
           </section>
           <section>
             <h3>Controles</h3>
             <table class="ctrl"><tr><th></th><th>Mover</th><th>Pegar</th><th>Trabalhar</th><th>Dash</th></tr>${kb}
-              <tr><td>🎮 Controle</td><td><kbd>${PAD_HINT[0]}</kbd></td><td><kbd>${PAD_HINT[1]}</kbd></td><td><kbd>${PAD_HINT[2]}</kbd></td><td><kbd>${PAD_HINT[3]}</kbd></td></tr></table>
+              <tr><td>🎮 Controle</td><td><kbd>${PAD_HINT[0]}</kbd></td><td><kbd>${PAD_HINT[1]}</kbd></td><td><kbd>${PAD_HINT[2]}</kbd></td><td><kbd>${PAD_HINT[3]}</kbd></td></tr>
+              <tr><td>🖱️ Mouse (uma mão)</td><td><kbd>${MOUSE_HINT[0]}</kbd></td><td><kbd>${MOUSE_HINT[1]}</kbd></td><td><kbd>${MOUSE_HINT[2]}</kbd></td><td><kbd>${MOUSE_HINT[3]}</kbd></td></tr></table>
             <h3>O caos</h3>
             <div class="chaos-grid">${chaos}</div>
           </section>
@@ -193,7 +196,8 @@ export class Screens {
   }
 
   // lobby: jogadores andam pelo escritório; teclas de menu desligadas
-  lobby({ level, players, myId = 0, role = 'local', code = '', link = '', peers = 0, freeDevices = [] }) {
+  lobby({ level, players, myId = 0, role = 'local', code = '', link = '', peers = 0, freeDevices = [],
+          index = 0, count = 1, locked = false, best = 0, starsBest = 0 }) {
     const slots = [0, 1, 2, 3].map((i) => {
       const p = players[i];
       const look = PLAYER_LOOKS[i];
@@ -201,30 +205,42 @@ export class Screens {
         return `<div class="slot2 empty"><div class="sl-num">P${i + 1}</div><div class="sl-wait">Aperte <b>PEGAR</b><br>para entrar</div></div>`;
       }
       const mine = p.owner === myId;
-      const hint = p.device.startsWith('gp') ? PAD_HINT : KB_SCHEMES[p.device]?.hint || PAD_HINT;
-      const dev = !mine ? '🌐 outro PC' : p.device.startsWith('gp') ? `🎮 Controle ${+p.device.slice(2) + 1}` : `⌨️ ${KB_SCHEMES[p.device].name}`;
+      const hint = hintOf(p.device);
+      const dev = !mine ? '🌐 outro PC' : DEVICE_LABEL(p.device);
       return `<div class="slot2" style="--c:${look.color}">
         <div class="sl-top"><div class="sl-num">${look.name}</div><div class="sl-dev">${dev}${mine && role !== 'local' ? ' · <b>você</b>' : ''}</div></div>
         ${mine ? `<div class="sl-keys"><span><kbd>${hint[0]}</kbd> mover</span><span><kbd>${hint[1]}</kbd> pegar</span><span><kbd>${hint[2]}</kbd> trabalhar</span><span><kbd>${hint[3]}</kbd> dash</span></div>`
           : '<div class="sl-keys"><span>Pronto pra codar 👋</span></div>'}
       </div>`;
     }).join('');
-    const join = Object.entries(KB_SCHEMES).filter(([id]) => freeDevices.includes(id))
-      .map(([, s]) => `<span><kbd>${s.hint[1]}</kbd> ${s.hint[0]}</span>`).join('') + '<span><kbd>A</kbd> controle</span>';
+    const join = freeDevices.map((id) => (id === 'mouse'
+      ? '<span><kbd>Dir.</kbd> mouse (uma mão)</span>'
+      : `<span><kbd>${hintOf(id)[1]}</kbd> ${hintOf(id)[0]}</span>`)).join('') + '<span><kbd>A</kbd> controle</span>';
     const room = role === 'host'
       ? `<div class="room"><span>Sala</span><b class="code">${code}</b><button class="chip" data-nav="copy">📋 Copiar link</button><small>${peers} PC${peers > 1 ? 's' : ''}</small></div>`
       : role === 'client' ? `<div class="room"><span>Sala</span><b class="code">${code}</b><small>conectado</small></div>` : '';
     const canStart = players.length && role !== 'client';
+    const picker = role === 'client' ? '' : `<div class="lv-pick">
+        <button class="lv-arrow" data-nav="prevLevel" ${index <= 0 ? 'disabled' : ''}>◀</button>
+        <span class="lv-count">Fase ${index + 1}/${count}</span>
+        <button class="lv-arrow" data-nav="nextLevel" ${index + 1 >= count ? 'disabled' : ''}>▶</button>
+      </div>`;
+    const bestLine = best > 0
+      ? `<div class="lv-best">🏆 seu melhor aqui: <b>${best}</b> pts${starsBest ? ` · ${'⭐'.repeat(starsBest)}` : ''}</div>`
+      : '';
     this.show('lobby', `
       <div class="lobby-top">
         <button class="back" data-nav="back">←</button>
         <div class="lt-title"><h2>Monte o time</h2><small>Andem pelo escritório enquanto esperam 😄</small></div>
         ${room}
       </div>
-      <div class="level-card">
+      <div class="level-card ${locked ? 'locked' : ''}">
         <div class="lv-name">${level.name}</div>
         <div class="lv-sub">${level.subtitle}</div>
         <div class="lv-meta"><span>⏱️ ${fmtTime(level.duration)}</span><span>🎯 ${level.maxOrders} demandas</span><span>⭐ ${level.stars.join(' / ')}</span></div>
+        ${bestLine}
+        ${picker}
+        ${locked ? '<div class="lv-lock">🔒 Termine a fase anterior com pelo menos ⭐ 1</div>' : (role === 'client' ? '' : '<small class="lv-hint"><kbd>[</kbd> <kbd>]</kbd> trocar de sprint</small>')}
       </div>
       <div class="lobby-bottom">
         <div class="slots2">${slots}</div>
@@ -273,10 +289,12 @@ export class Screens {
         </div>`;
     this.show('results', `
       <div class="results2">
-        <div class="r-kicker">SPRINT ENCERRADA</div>
+        <div class="r-kicker">SPRINT ENCERRADA${r.levelName ? ` · ${r.levelName.split(' — ')[0]}` : ''}</div>
         <div class="r-head">${r.headline}</div>
         <div class="stars2">${stars}</div>
         <div class="r-score"><span class="count">0</span><small>pontos</small></div>
+        ${r.unlockedName ? `<div class="r-unlock">🔓 <b>${r.unlockedName}</b> desbloqueada!</div>`
+          : (r.stars === 0 && r.hasNext ? '<div class="r-locked">⭐ Tire pelo menos 1 estrela pra liberar a próxima sprint</div>' : '')}
         ${r.record ? `<div class="r-rec new">🏆 NOVO RECORDE!<small>${r.best > 0 ? `superou os ${r.best} pts anteriores` : 'primeira sprint registrada'}</small></div>`
           : r.best > 0 ? `<div class="r-rec">🏆 Recorde: ${r.best} pts<small>faltaram ${Math.max(0, r.best - r.score)} pra bater</small></div>` : ''}
         <div class="r-line"><span>✅ ${r.delivered} entregues</span><span>❌ ${r.failed} perdidos</span><span>🗑️ ${r.trashed} won't fix</span>${r.combo >= 2 ? `<span>🔥 ${r.combo} seguidas</span>` : ''}</div>

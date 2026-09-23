@@ -93,13 +93,24 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .room span, .room small { opacity: 0.75; font-size: 13px; }
 .code { font-family: 'JetBrains Mono', monospace; background: var(--yellow); color: #1c2033; padding: 2px 10px; border-radius: 8px; letter-spacing: 4px; font-size: 20px; }
 .chip { background: var(--blue); padding: 6px 12px; border-radius: 10px; font-weight: 600; font-size: 13px; box-shadow: 0 3px 0 #1f6fb5; }
-.level-card { display: none; }
-@media (min-width: 1100px) {
-  .level-card { display: block; position: absolute; top: 84px; left: 16px; width: 300px; background: rgba(21,26,44,0.88); border: 2px solid var(--line); border-radius: 18px; padding: 12px 14px; }
+.level-card { position: absolute; top: 84px; left: 16px; width: min(310px, 34vw); background: rgba(21,26,44,0.88); border: 2px solid var(--line); border-radius: 18px; padding: 12px 14px; }
+.level-card.locked { border-color: #6b4f8a; }
+@media (max-width: 1099px) {
+  .level-card { top: 72px; width: 200px; padding: 8px 10px; }
+  .lv-sub { display: none; }
 }
 .lv-name { font-weight: 700; color: var(--yellow); font-size: 17px; }
 .lv-sub { font-size: 13px; opacity: 0.8; margin: 2px 0 8px; }
 .lv-meta { display: flex; gap: 10px; font-size: 12px; opacity: 0.9; flex-wrap: wrap; }
+.lv-best { font-size: 12px; margin-top: 8px; opacity: 0.9; }
+.lv-best b { color: var(--yellow); font-family: 'JetBrains Mono', monospace; }
+.lv-pick { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.lv-arrow { width: 30px; height: 30px; border-radius: 9px; background: var(--card); border: 2px solid var(--line); font-size: 13px; line-height: 1; }
+.lv-arrow:hover:not(:disabled) { background: var(--yellow); color: #1c2033; }
+.lv-arrow:disabled { opacity: 0.3; cursor: default; }
+.lv-count { flex: 1; text-align: center; font-size: 13px; font-weight: 600; }
+.lv-lock { font-size: 12px; margin-top: 8px; color: #c3a6ff; }
+.lv-hint { display: block; font-size: 11px; opacity: 0.6; margin-top: 7px; }
 .lobby-bottom { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 10px; }
 .slots2 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .slot2 { background: color-mix(in srgb, var(--c) 28%, #151a2c); border: 3px solid var(--c); border-radius: 18px; padding: 10px 12px; min-height: 118px;
@@ -144,6 +155,10 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .r-rec small { font-size: 12px; font-weight: 600; opacity: 0.7; letter-spacing: 0.4px; }
 .r-rec.new { color: #1c2033; background: var(--yellow); border-color: #fff; animation: recPulse 0.9s ease-in-out infinite; }
 @keyframes recPulse { 50% { box-shadow: 0 0 28px rgba(255,209,102,0.85); transform: scale(1.04); } }
+.r-unlock { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 700; color: #6ee7a0; background: rgba(110,231,160,0.12); border: 2px solid rgba(110,231,160,0.45); border-radius: 14px; padding: 5px 18px; animation: unlockPop 0.6s cubic-bezier(.2,1.8,.4,1) both; }
+.r-unlock b { color: #b8f2a0; }
+@keyframes unlockPop { from { transform: scale(0.7); opacity: 0; } }
+.r-locked { font-size: 13px; opacity: 0.65; background: rgba(0,0,0,0.3); border-radius: 99px; padding: 4px 14px; }
 .r-line { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; opacity: 0.85; }
 .r-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; width: 100%; }
 .pcard { border: 3px solid var(--c); background: color-mix(in srgb, var(--c) 20%, #151a2c); border-radius: 16px; padding: 10px; animation: slotIn 0.4s cubic-bezier(.2,1.6,.4,1) both; animation-delay: var(--d); }

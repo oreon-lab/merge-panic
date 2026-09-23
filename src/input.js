@@ -1,4 +1,6 @@
-// Entrada unificada: até 3 esquemas de teclado + gamepads.
+// Entrada unificada: até 3 esquemas de teclado + gamepads + mouse de uma mão.
+import * as THREE from 'three';
+
 export const KB_SCHEMES = {
   kbA: { name: 'Teclado 1', up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], pick: ['KeyE'], use: ['KeyQ'], dash: ['ShiftLeft'],
          hint: ['WASD', 'E', 'Q', 'Shift'] },
@@ -9,12 +11,16 @@ export const KB_SCHEMES = {
          hint: ['Setas', 'Shift dir.', 'Ctrl dir.', 'Num0'] },
 };
 export const PAD_HINT = ['Analógico', 'A', 'X', 'B'];
+export const MOUSE_HINT = ['Clique', 'Dir.', 'Esq.', 'Meio'];
 
 const EMPTY = { mx: 0, my: 0, pick: false, use: false, usePressed: false, dash: false, start: false };
 const BLOCK = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab']);
+const CHAO = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // plano do piso, pro clique virar destino
 
 export class Input {
-  constructor() {
+  constructor(camera, canvas) {
+    this.camera = camera;
+    this.canvas = canvas;
     this.down = new Set();
     this.pressed = new Set();
     this.states = {};
@@ -22,6 +28,13 @@ export class Input {
     this.global = new Set();
     this.menu = {};
     this.listeners = [];
+    // mouse: destino no chão sob o cursor + botões
+    this.ray = new THREE.Raycaster();
+    this.ndc = new THREE.Vector2();
+    this.hit = new THREE.Vector3();
+    this.aim = null;
+    this.pt = { x: 0, y: 0, inside: false, left: false, right: false, middle: false, leftHit: false, rightHit: false, middleHit: false };
+
     window.addEventListener('keydown', (e) => {
       if (e.target?.tagName === 'INPUT') return;
       if (BLOCK.has(e.code)) e.preventDefault();
@@ -30,11 +43,62 @@ export class Input {
       this.listeners.forEach((f) => f());
     });
     window.addEventListener('keyup', (e) => this.down.delete(e.code));
-    window.addEventListener('blur', () => this.down.clear());
-    document.addEventListener('visibilitychange', () => this.down.clear());
-    window.addEventListener('pointerdown', () => this.listeners.forEach((f) => f()));
+    window.addEventListener('blur', () => { this.down.clear(); this.releaseAll(); });
+    document.addEventListener('visibilitychange', () => { this.down.clear(); this.releaseAll(); });
+    window.addEventListener('pointerdown', (e) => this.onDown(e));
+    window.addEventListener('pointermove', (e) => this.onMove(e));
+    window.addEventListener('pointerup', (e) => this.onUp(e));
+    window.addEventListener('pointercancel', () => this.releaseAll());
+    canvas?.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas?.addEventListener('pointerleave', () => { this.pt.inside = false; });
   }
   onAnyInput(f) { this.listeners.push(f); }
+
+  releaseAll() {
+    const p = this.pt;
+    p.left = p.right = p.middle = false;
+    this.aim = null;
+  }
+  onMove(e) {
+    this.pt.x = e.clientX; this.pt.y = e.clientY;
+    this.pt.inside = true;
+    this.refreshAim();
+  }
+  onDown(e) {
+    this.pt.x = e.clientX; this.pt.y = e.clientY;
+    this.pt.inside = true;
+    // cliques na interface (menus, lobby) não são comando de jogo
+    if (e.target === this.canvas) {
+      if (e.button === 0) { this.pt.left = true; this.pt.leftHit = true; }
+      if (e.button === 1) { this.pt.middle = true; this.pt.middleHit = true; e.preventDefault(); }
+      if (e.button === 2) { this.pt.right = true; this.pt.rightHit = true; }
+    }
+    this.refreshAim();
+    this.listeners.forEach((f) => f());
+  }
+  onUp(e) {
+    if (e.button === 0) this.pt.left = false;
+    if (e.button === 1) this.pt.middle = false;
+    if (e.button === 2) this.pt.right = false;
+    this.refreshAim();
+  }
+
+  // O destino é travado no evento do ponteiro, não a cada frame: a câmera segue
+  // o jogador, então o mesmo pixel de tela apontaria pra outro lugar do mundo e
+  // o personagem perseguiria um alvo que foge.
+  refreshAim() {
+    this.aim = this.pt.left && this.pt.inside ? this.computeAim() : null;
+  }
+
+  // onde o cursor aponta no piso (y = 0); null se estiver fora do canvas
+  computeAim() {
+    const { camera, canvas } = this;
+    if (!camera || !canvas) return null;
+    const r = canvas.getBoundingClientRect();
+    this.ndc.set(((this.pt.x - r.left) / r.width) * 2 - 1, -((this.pt.y - r.top) / r.height) * 2 + 1);
+    this.ray.setFromCamera(this.ndc, camera);
+    return this.ray.ray.intersectPlane(CHAO, this.hit) ? { x: this.hit.x, z: this.hit.z } : null;
+  }
 
   update() {
     const any = (codes, set) => codes.some((c) => set.has(c));
@@ -86,8 +150,21 @@ export class Input {
       if (edge(1)) m.back = true;
       this.prevPad[id] = { btn: now, dir };
     }
+    // mouse de uma mão: segure o esquerdo pra andar até o destino travado no
+    // clique (e trabalhar se parar numa estação); direito pega/solta; meio dash.
+    this.states.mouse = {
+      mx: 0, my: 0,
+      aim: this.aim,
+      pick: this.pt.rightHit,
+      use: this.pt.left,
+      usePressed: this.pt.leftHit,
+      dash: this.pt.middleHit,
+      start: false,
+    };
+    this.pt.leftHit = this.pt.rightHit = this.pt.middleHit = false;
+
     this.menu = m;
-    this.global = new Set([...this.pressed].filter((c) => ['Space', 'Enter', 'NumpadEnter', 'Escape', 'KeyR', 'KeyM'].includes(c)));
+    this.global = new Set([...this.pressed].filter((c) => ['Space', 'Enter', 'NumpadEnter', 'Escape', 'KeyR', 'KeyM', 'BracketLeft', 'BracketRight'].includes(c)));
     this.pressed.clear();
   }
   get(id) { return this.states[id] || EMPTY; }
@@ -98,5 +175,11 @@ export class Input {
       Object.values(this.states).some((s) => s.start);
   }
   // rótulos das teclas de um dispositivo: [mover, pegar, usar, dash]
-  hint(device) { return device?.startsWith('gp') ? PAD_HINT : KB_SCHEMES[device]?.hint || PAD_HINT; }
+  hint(device) {
+    if (device === 'mouse') return MOUSE_HINT;
+    return device?.startsWith('gp') ? PAD_HINT : KB_SCHEMES[device]?.hint || PAD_HINT;
+  }
 }
+export const DEVICE_LABEL = (device) => (device === 'mouse' ? '🖱️ Mouse (uma mão)'
+  : device?.startsWith('gp') ? `🎮 Controle ${+device.slice(2) + 1}`
+  : `⌨️ ${KB_SCHEMES[device]?.name || device}`);

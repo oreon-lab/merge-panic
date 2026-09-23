@@ -28,6 +28,7 @@ export class UI {
         <div class="goal"><div class="gbar"><i class="gfill"></i></div><div class="gmk"></div></div>
       </div>
       <div class="combo hidden"><span class="cx">x2</span><div class="ct"><i></i></div></div>
+      <div class="bonus hidden"><span class="bx">💛 x2</span><div class="bt"><i></i></div></div>
       <div class="deliv"><span class="lbl">ENTREGUES</span><span class="v">0/20</span></div>`);
     this.hud.append(this.stats);
     this.clockEl = this.stats.querySelector('.clock');
@@ -37,6 +38,9 @@ export class UI {
     this.comboEl = this.stats.querySelector('.combo');
     this.comboX = this.stats.querySelector('.combo .cx');
     this.comboBar = this.stats.querySelector('.combo .ct i');
+    this.bonusEl = this.stats.querySelector('.bonus');
+    this.bonusX = this.stats.querySelector('.bonus .bx');
+    this.bonusBar = this.stats.querySelector('.bonus .bt i');
     this.toastEl = h('div', 'toast'); this.root.append(this.toastEl);
     this.bannerEl = h('div', 'banner'); this.root.append(this.bannerEl);
     this.bigEl = h('div', 'bigcount'); this.root.append(this.bigEl);
@@ -223,8 +227,8 @@ export class UI {
     }
   }
 
-  // stars = limiares do nível; combo = { mult, t, window } da sequência atual
-  setStats(time, score, delivered, max, stars = [], combo = null) {
+  // opts: { stars: limiares do nível, combo: {mult,t,window}, bonus: {text,t,window} }
+  setStats(time, score, delivered, max, { stars = [], combo = null, bonus = null } = {}) {
     this.clockEl.querySelector('.v').textContent = fmtTime(time);
     this.clockEl.classList.toggle('low', time <= 30);
     if (this.scoreEl.textContent !== String(score)) {
@@ -256,6 +260,12 @@ export class UI {
       this.comboEl.dataset.mult = combo.mult;
       this.comboX.textContent = `x${combo.mult}`;
       this.comboBar.style.width = `${Math.max(0, Math.min(100, (combo.t / combo.window) * 100))}%`;
+    }
+
+    this.bonusEl.classList.toggle('hidden', !bonus);
+    if (bonus) {
+      if (this.bonusX.textContent !== bonus.text) this.bonusX.textContent = bonus.text;
+      this.bonusBar.style.width = `${Math.max(0, Math.min(100, (bonus.t / bonus.window) * 100))}%`;
     }
   }
 
