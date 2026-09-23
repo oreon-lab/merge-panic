@@ -34,14 +34,17 @@ function stageBar(company, from = null) {
 }
 
 // moldura padrão dos painéis: cabeçalho, conteúdo, rodapé
+// barra de comandos no rodapé, como nos menus de console
+const PROMPTS = '<div class="prompts-bar"><span><kbd>Esc</kbd> Voltar</span><span><kbd>↑</kbd><kbd>↓</kbd> Navegar</span><span><kbd>Enter</kbd> Confirmar</span></div>';
+
 const frame = ({ icon: ic, title, sub = '', body, foot = '', cls = '' }) => `
   <div class="pnl ${cls}">
-    <div class="pnl-head"><button class="back" data-nav="back" title="Voltar (Esc)">${icon('back', 20)}</button>
-      <div class="pnl-ic">${icon(ic, 22)}</div>
-      <div class="pnl-title"><h2>${title}</h2>${sub ? `<small>${sub}</small>` : ''}</div>
-      <kbd class="esc-hint">Esc</kbd></div>
+    <div class="pnl-head"><button class="back" data-nav="back" title="Voltar (Esc)">${icon('back', 22)}</button>
+      <div class="ribbon"><span class="rb-ic">${icon(ic, 24)}</span><h2>${title}</h2></div>
+      ${sub ? `<small class="pnl-sub">${sub}</small>` : ''}</div>
     <div class="pnl-body">${body}</div>
     ${foot ? `<div class="pnl-foot">${foot}</div>` : ''}
+    ${PROMPTS}
   </div>`;
 
 export class Screens {
@@ -200,7 +203,7 @@ export class Screens {
     const co = company
       ? `<div class="hq-co"><div class="hq-ic">${stageOf(company.valuation).icon}</div>
           <div class="hq-coinfo"><b>${esc(company.name)}</b>${role === 'client' ? '<small class="guest">HQ do host</small>' : ''}${stageBar(company)}</div>
-          <div class="hq-cash"><small>Caixa</small><b>${fmtMoney(company.cash)}</b></div></div>`
+          <div class="hq-cash"><small>Caixa</small><b class="${company.cash < 0 ? 'neg' : ''}">${fmtMoney(company.cash)}</b></div></div>`
       : `<div class="hq-co"><div class="hq-ic">🏚️</div><div class="hq-coinfo"><b>${offline ? 'Modo offline' : 'Conectando...'}</b><small>${offline ? 'o progresso não será salvo' : ''}</small></div></div>`;
     const room = code
       ? `<button class="hq-room" data-nav="room">${icon('globe', 18)} Sala <b>${code}</b><small>${role === 'host' ? `${peers} PC${peers > 1 ? 's' : ''}` : 'convidado'}</small></button>` : '';
@@ -428,7 +431,7 @@ export class Screens {
         : `<button class="btn big" data-nav="again">${icon('restart', 18)} Jogar de novo</button><button class="btn primary big" data-nav="hq">${icon('building', 18)} Voltar ao HQ</button>`;
     }
 
-    this.show('results', `<div class="results3"><div class="r-dots">${dots}</div><div class="r-body">${body}</div><div class="pnl-foot">${foot}</div></div>`,
+    this.show('results', `<div class="results3"><div class="r-dots">${dots}</div><div class="r-body">${body}</div><div class="pnl-foot">${foot}</div>${PROMPTS}</div>`,
       { focus: step === 3 && role !== 'client' ? 1 : 0 });
 
     // animações de contagem

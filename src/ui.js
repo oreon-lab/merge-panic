@@ -350,10 +350,21 @@ export class UI {
   // etiquetas das placas de compra (nome + preço, verde se dá pra comprar)
   updatePads(pads, show, near = []) {
     const seen = new Set();
+    // etiqueta completa só na placa mais próxima de cada jogador (evita etiquetas empilhadas)
+    const closest = new Set();
+    for (const p of near) {
+      let best = null, bd = 2.4;
+      for (const pad of pads) {
+        if (!pad.visible) continue;
+        const d = Math.hypot(p.x - pad.pos.x, p.z - pad.pos.z);
+        if (d < bd) { bd = d; best = pad; }
+      }
+      if (best) closest.add(best);
+    }
     if (show) for (const pad of pads) {
       if (!pad.visible) continue;
       // perto de alguém: etiqueta completa; longe: só as compráveis, em versão compacta
-      const close = near.some((p) => Math.hypot(p.x - pad.pos.x, p.z - pad.pos.z) < 2.4);
+      const close = closest.has(pad);
       if (!close && !pad.affordable) continue;
       seen.add(pad.id);
       let el = this.padEls.get(pad.id);
