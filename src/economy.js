@@ -5,10 +5,10 @@
 // Estágios da empresa, por valuation (receita acumulada — gastar não diminui)
 export const STAGES = [
   { id: 0, name: 'Garagem',   icon: '🏚️', at: 0,     wall: '#e9e3d7', trim: '#8f7f68' },
-  { id: 1, name: 'Startup',   icon: '🚀', at: 4000,  wall: '#e3ecf2', trim: '#5b7a99' },
-  { id: 2, name: 'Scale-up',  icon: '📈', at: 12000, wall: '#e8e4f3', trim: '#6b5b99' },
-  { id: 3, name: 'Unicórnio', icon: '🦄', at: 30000, wall: '#f3e4ee', trim: '#a0507f' },
-  { id: 4, name: 'Big Tech',  icon: '🏢', at: 70000, wall: '#23283d', trim: '#ffd166' },
+  { id: 1, name: 'Startup',   icon: '🚀', at: 3200,  wall: '#e3ecf2', trim: '#5b7a99' },
+  { id: 2, name: 'Scale-up',  icon: '📈', at: 9000,  wall: '#e8e4f3', trim: '#6b5b99' },
+  { id: 3, name: 'Unicórnio', icon: '🦄', at: 22000, wall: '#f3e4ee', trim: '#a0507f' },
+  { id: 4, name: 'Big Tech',  icon: '🏢', at: 55000, wall: '#23283d', trim: '#ffd166' },
 ];
 
 export function stageOf(valuation = 0) {
@@ -75,14 +75,14 @@ export const UPGRADES = [
   {
     id: 'coverage', icon: '🛡️', name: 'Cobertura de testes', station: 'test',
     desc: 'Menos testes flaky: bug escondido quase não chega em produção.',
-    levels: [{ price: 2500, stage: 2 }, { price: 6000, stage: 3 }],
+    levels: [{ price: 2500, stage: 2 }, { price: 6000, stage: 4 }],
     fx: (n) => ({ flakyMult: [1, 0.6, 0.3][n] }),
     label: (n) => `${[0, 40, 70][n]}% menos bugs escapando`,
   },
   {
     id: 'linter', icon: '✅', name: 'Linters automáticos', station: 'review',
     desc: 'Menos "nit": o review pede mudanças com menos frequência.',
-    levels: [{ price: 2200, stage: 2 }, { price: 5000, stage: 3 }],
+    levels: [{ price: 2200, stage: 2 }, { price: 5000, stage: 4 }],
     fx: (n) => ({ rejectMult: [1, 0.5, 0.15][n] }),
     label: (n) => `${[0, 50, 85][n]}% menos changes requested`,
   },
@@ -207,10 +207,10 @@ export function starsFor(level, score) {
 }
 
 // Quanto a sprint rende pra empresa: pontos + bônus por estrela; empresas maiores faturam mais
-export const STAR_BONUS = [0, 250, 600, 1200];
+export const STAR_BONUS = [0, 400, 900, 1600];
 export const revenueMult = (stage) => 1 + 0.25 * stage;
-export function payoutOf(stage, score, stars) {
-  return Math.round((Math.max(0, score) + STAR_BONUS[stars]) * revenueMult(stage));
+export function payoutOf(stage, score, stars, bonusScale = 1) {
+  return Math.round((Math.max(0, score) + STAR_BONUS[stars] * bonusScale) * revenueMult(stage));
 }
 
 export const fmtMoney = (v) => 'R$ ' + Math.round(v).toLocaleString('pt-BR');

@@ -6,9 +6,11 @@ import { FX } from './fx.js';
 import { aiFace, buildTicketMesh } from './models.js';
 import { PLAYER_LOOKS } from './player.js';
 import { sfx } from './audio.js';
+import { save } from './save.js';
 import { effectsOf, applyToLevel, buyBlock, priceOf, listBuilds, stageOf, UPGRADE, UPGRADE_NEEDS, hasStation, nextLevelOf, revenueMult, fmtMoney } from './economy.js';
 
 const TIP_MAX = 0.5;      // gorjeta máxima: +50% dos pontos se entregar rápido
+const SETBACK_EXTRA = 15; // contratempo (teste/review/conflito) estende o prazo: o cliente entendeu o atraso
 const EXPIRE_PENALTY = 10;
 const TRASH_PENALTY = 5;
 const TEAM_BONUS = 10;
@@ -66,6 +68,8 @@ export class Game {
     this.combo = 0;         // entregas seguidas sem perder um prazo
     this.comboBest = 0;
     this.comboT = 0;        // segundos restantes da janela de combo
+    this.cleanStreak = 0;   // entregas sem expirar/descartar (o estagiário premia)
+    this.evWarned = {};     // caos com telegrafia: já avisado, falta disparar
     this.starsHit = 0;      // estrelas já celebradas nesta sprint
     this.ended = false;
     this.countdown = 0;
@@ -83,7 +87,12 @@ export class Game {
     this.golden = 0;         // segundos restantes de deploy dourado
     this.cache = 0;          // segundos restantes de cache quente
     this.smokeT = 0;
+    // quebra-gelo: guia a primeira entrega (só local/host estreante)
+    this.coachOn = role !== 'client' && !save.tutorialDone;
+    this.coachStep = 0;
+    this.coachDoneT = 0;
     this.ui.clearWorld();
+    this.ui.setCoach(null);
     this.ui.setAlarm(false);
     this.world.stations.forEach((s) => this.ui.addStationLabel(s));
     roster.forEach((r) => this.addPlayer(r, true));
@@ -99,6 +108,8 @@ export class Game {
     this.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
     this.ui.clearWorld();
     this.ui.setAlarm(false);
+    this.ui.setPlaying(false);
+    this.ui.setCoach(null);
   }
 
   addPlayer({ owner = 0, device }, silent = false) {
@@ -178,6 +189,8 @@ export class Game {
         this.mode = 'results';
         sfx.play('end');
         this.ui.showHud(false);
+        this.ui.setPlaying(false);
+        this.ui.setCoach(null);
         this.ui.setAlarm(false);
         this.results = { ...d, levelName: this.level.name, economy: null };
         if (!this.isClient) this.app.onSprintEnd?.(this);
@@ -201,14 +214,21 @@ export class Game {
 
   start() {
     this.mode = 'countdown';
-    this.countdown = 3.5;
+    // estreante ganha 1.5s a mais pra ler o objetivo (o coach já mostra o passo 1)
+    this.countdown = this.coachOn ? 5 : 3.5;
     this.lastCount = 4;
+    this.coachStep = 0;
+    this.coachDoneT = 0;
+    this.cleanStreak = 0;
+    this.evWarned = {};
     this.enterMatchUI();
     this.players.forEach((p, i) => p.spawn(this.world.spawns[i]));
     // agenda o caos e as bênçãos, escalonando as primeiras ocorrências
+    // com coach: sem sacanagem no primeiro minuto (quebra-gelo)
     const lv = this.level;
-    this.schedule(this.evNext, lv.events, lv.firstEventAt ?? 40, 15);
-    this.schedule(this.lkNext, lv.lucky, lv.firstLuckyAt ?? 30, 12);
+    const calm = this.coachOn ? 60 : 0;
+    this.schedule(this.evNext, lv.events, (lv.firstEventAt ?? 40) + calm, 15);
+    this.schedule(this.lkNext, lv.lucky, (lv.firstLuckyAt ?? 30) + calm, 12);
   }
 
   schedule(next, table, firstAt, gap) {
@@ -219,6 +239,7 @@ export class Game {
 
   enterMatchUI() {
     this.ui.showHud(true);
+    this.ui.setPlaying(true);
     this.app.resize();
     this.hudStats();
   }
@@ -234,7 +255,7 @@ export class Game {
       if (n !== this.lastCount) {
         this.lastCount = n;
         if (n > 0) { this.emit('banner', { text: String(n), ms: 700 }); this.sound('tick'); }
-        else { this.emit('banner', { text: 'DEPLOY!', sub: 'Bora codar!', ms: 900 }); this.sound('go'); }
+        else { this.emit('banner', { text: 'DEPLOY!', ms: 900 }); this.sound('go'); }
       }
       if (this.countdown <= 0) this.mode = 'playing';
     }
@@ -285,7 +306,7 @@ export class Game {
       this.checkStars();
       this.updateLucky(dt);
       const sec = Math.ceil(this.timeLeft);
-      if (sec <= 10 && sec > 0 && sec !== this.lastSec) {
+      if (sec <= 5 && sec > 0 && sec !== this.lastSec) {
         this.lastSec = sec;
         this.emit('bigcount', { n: sec });
         this.sound('tick');
@@ -297,7 +318,57 @@ export class Game {
     this.updateDemo(dt);
     this.animateStations(dt);
     this.fx.update(dt);
+    if (this.coachOn && (playing || this.mode === 'countdown')) this.updateCoach(dt);
     this.updateUI(dt);
+  }
+
+  // ---------- quebra-gelo: 4 passos até a primeira entrega ----------
+  // Só aparece pra estreante (local/host, tutorial incompleto). Robusto a erro:
+  // avança por estado real (segurando? progrediu? entregou?), nunca trava.
+  coachPlayer() {
+    return this.players.find((p) => this.isMine(p) && !p.gone) || null;
+  }
+
+  coachKeys(p) {
+    try {
+      const k = this.app.input.hint(p.device);
+      return { move: k[0], pick: k[1], use: k[2] };
+    } catch { return { move: 'mover', pick: 'pegar', use: 'usar' }; }
+  }
+
+  updateCoach(dt) {
+    const p = this.coachPlayer();
+    if (!p) { this.ui.setCoach(null); return; }
+    const k = this.coachKeys(p);
+    const progressed = this.tickets.some((t) => t.stepIndex > 0);
+    // transições por estado
+    if (this.coachStep === 0 && p.holding) this.coachStep = 1;
+    else if (this.coachStep === 1 && (!p.holding || progressed)) this.coachStep = 2;
+    else if (this.coachStep === 2 && progressed) this.coachStep = 3;
+    if (this.delivered > 0) {
+      if (this.coachStep !== 4) {
+        this.coachStep = 4;
+        this.coachDoneT = 5;
+        save.tutorialDone = true;
+        this.sound('star');
+      }
+    }
+    if (this.coachStep === 4) {
+      this.coachDoneT -= dt;
+      this.ui.setCoach(`<b>🎉 Mandou bem!</b> Repita o fluxo e mire nas <b>⭐</b> — o caos começa já já.`);
+      if (this.coachDoneT <= 0) { this.coachOn = false; this.ui.setCoach(null); }
+      return;
+    }
+    const step = `<span class="cstep">${this.coachStep + 1}/4</span>`;
+    if (this.coachStep === 0) {
+      this.ui.setCoach(`${step} <b>Vá ao 📋 Backlog roxo</b> e aperte <kbd>${k.pick}</kbd> pra pegar · <kbd>${k.move}</kbd> move`);
+    } else if (this.coachStep === 1) {
+      this.ui.setCoach(`${step} <b>Siga a ▼ até o 💻 Dev</b> · aperte <kbd>${k.pick}</kbd> pra soltar e <b>SEGURE <kbd>${k.use}</kbd></b> pra codar`);
+    } else if (this.coachStep === 2) {
+      this.ui.setCoach(`${step} <b>Boa!</b> 🧪 Testes é automático — <b>siga a ▼</b> pro próximo passo`);
+    } else {
+      this.ui.setCoach(`${step} <b>Entregue no 🔀 Merge verde</b> pra fazer pontos!`);
+    }
   }
 
   applyMeeting(p, dt, playing) {
@@ -361,7 +432,7 @@ export class Game {
   }
 
   hudStats() {
-    this.ui.setStats(this.timeLeft, this.score, this.delivered, this.level.maxOrders, {
+    this.ui.setStats(this.timeLeft, this.score, {
       stars: this.level.stars,
       combo: { mult: comboMult(this.combo), t: this.comboT, window: COMBO_WINDOW },
       bonus: this.bonusInfo(),
@@ -379,34 +450,66 @@ export class Game {
   }
 
   updateUI(dt = 0) {
+    const playing = this.mode === 'playing' || this.mode === 'countdown';
     if (this.mode !== 'lobby') {
       this.hudStats();
       this.ui.syncOrders(this.tickets, this.players);
     }
+    this.ui.setFocus(this.focusStations());
     this.ui.updateWorld(this.tickets);
-    this.ui.updateAlerts(this.computeAlerts());
+    const alerts = this.computeAlerts();
+    this.ui.updateAlerts(alerts);
+    // barra de progresso do trabalho (reparo/conflito já têm a do alerta)
+    const busy = new Set(alerts.filter((a) => a.prog != null).map((a) => a.st.index));
+    this.ui.updateWork(this.computeWork(busy));
     this.ui.updatePlayers(this.players, this.app.myId, this.role !== 'local');
+    // alerta diz O QUÊ (status); o prompt diz COMO (tecla) — complementares.
     this.ui.updatePrompts(this.computePrompts());
     this.ui.updateGuides(this.computeGuides());
     this.refreshPads();
     const near = this.players.filter((p) => this.isMine(p) && !p.gone).map((p) => p.pos);
-    this.ui.updatePads(this.world.pads, this.mode === 'lobby' || this.mode === 'playing', near);
-    this.ui.setCash(this.cashView, this.mode === 'playing');
+    this.ui.updatePads(this.world.pads, this.mode === 'lobby' || playing, near, playing);
     this.ui.layoutWorld();   // resolve as colisões dos elementos de mundo
     this.dust(dt);
     this.ui.setAlarm(this.incident > 0 && this.mode !== 'results');
+  }
+
+  // Etiquetas na sprint: só âncoras (Backlog/Merge/Lixo/Café) + problema.
+  // O destino do ticket quem diz é a ▼ — etiqueta na mesa seria o 3º texto
+  // sobre o mesmo lugar (etiqueta + prompt + seta).
+  focusStations() {
+    if (this.mode !== 'playing' && this.mode !== 'countdown') return null;
+    const keep = new Set(['backlog', 'merge', 'trash', 'coffee']);
+    for (const st of this.world.stations) {
+      if ((st.type === 'ai' && st.broken) || (st.type === 'router' && this.wifiDown) ||
+        (st.type === 'merge' && st.conflict !== null) || (st.type === 'server' && this.incident > 0)) keep.add(st.type);
+    }
+    return keep;
   }
 
   computeAlerts() {
     const out = [];
     for (const st of this.world.stations) {
       let a = null;
-      if (st.type === 'ai' && st.broken) a = { icon: '🤖', text: 'Alucinando! Segure USAR', prog: st.repair, bad: true };
-      else if (st.type === 'router' && this.wifiDown) a = { icon: '📶', text: 'Reinicie o Wi-Fi!', prog: st.repair, bad: true };
-      else if (st.type === 'merge' && st.conflict !== null) a = { icon: '⚔️', text: 'Conflito! Segure USAR', prog: st.conflict, bad: true };
+      if (st.type === 'ai' && st.broken) a = { icon: '🤖', text: 'Reinicie a IA', prog: st.repair, bad: true };
+      else if (st.type === 'router' && this.wifiDown) a = { icon: '📶', text: 'Reinicie o Wi-Fi', prog: st.repair, bad: true };
+      else if (st.type === 'merge' && st.conflict !== null) a = { icon: '⚔️', text: 'Conflito!', prog: st.conflict, bad: true };
       else if ((st.type === 'ai' || st.type === 'test') && this.wifiDown) a = { icon: '📵', text: 'Sem internet', prog: null };
-      else if (st.type === 'server' && this.incident > 0) a = { icon: '🔥', text: 'Produção pegando fogo!', prog: null, bad: true };
+      else if (st.type === 'server' && this.incident > 0) a = { icon: '🔥', text: 'Produção fora!', prog: null, bad: true };
       if (a) { a.st = st; out.push(a); }
+    }
+    return out;
+  }
+
+  // estações com ticket em andamento: barra de progresso do trabalho.
+  // Pula quem já mostra progresso no alerta (reparo/conflito) pra não duplicar.
+  computeWork(busy = new Set()) {
+    if (this.mode !== 'playing' && this.mode !== 'countdown') return [];
+    const out = [];
+    for (const st of this.world.stations) {
+      const t = st.item;
+      if (!t || busy.has(st.index)) continue;
+      if (t.progress > 0) out.push({ st, prog: t.progress });
     }
     return out;
   }
@@ -422,46 +525,71 @@ export class Game {
     }
   }
 
-  // "E Pegar · Q Trabalhar" sobre a estação mirada (só jogadores deste PC)
+  // Prompt por jogador com as teclas à mostra: Pegar + ação juntos
+  // (ex.: [E] Pegar + [Q] Codar), mais [F] Upgrade quando a estação tem
+  // melhoria comprável. Com ticket na mão, placa de compra não sugere nada.
   computePrompts() {
     if (this.mode !== 'playing' && this.mode !== 'lobby') return [];
     const out = [];
     const waiting = this.tickets.some((t) => t.state === 'waiting');
     for (const p of this.players) {
-      const pad = this.padUnder(p);
-      if (pad && this.isMine(p) && !p.frozen && !(p.target && this.canWork(p, p.target, true))) {
+      if (!this.isMine(p) || p.frozen) continue;
+      const t = p.holding;
+      const pad = !t ? this.padUnder(p) : null;
+      if (pad && !(p.target && this.canWork(p, p.target, true))) {
         const [, , kUse] = this.app.input.hint(p.device);
         const kBuy = this.app.input.hint(p.device)[4];
-        const how = p.device === 'mouse' ? 'Segure p/ comprar' : 'Comprar';
-        out.push({ p, st: pad, items: pad.block ? [['🔒', pad.block]] : [[p.device === 'mouse' ? kUse : kBuy, `${how} · ${fmtMoney(pad.price)}`]] });
+        if (this.mode === 'lobby') {
+          const how = p.device === 'mouse' ? 'Segure p/ comprar' : 'Comprar';
+          out.push({ p, st: pad, items: pad.block ? [['🔒', pad.block]] : [[p.device === 'mouse' ? kUse : kBuy, `${how} · ${fmtMoney(pad.price)}`]] });
+        } else if (!pad.block) {
+          out.push({ p, st: pad, items: [[p.device === 'mouse' ? kUse : kBuy, 'Comprar']] });
+        }
         continue;
       }
       if (this.mode !== 'playing') continue;
       const st = p.target;
-      if (!this.isMine(p) || p.frozen || !st) continue;
+      if (!st) continue;
       const [, kPick, kUse] = this.app.input.hint(p.device);
+      const kBuy = this.app.input.hint(p.device)[4];
       const items = [];
-      const t = p.holding;
+      const workItem = () => {
+        const it = st.item;
+        const verb = st.broken || st.type === 'router' ? 'Reiniciar'
+          : st.type === 'merge' ? 'Resolver'
+          : it?.step === 'review' ? 'Revisar'
+          : it?.step === 'fix' ? 'Corrigir' : 'Codar';
+        return [kUse, `${verb} (segure)`];
+      };
       if (t) {
         if (st.type === 'trash') items.push([kPick, 'Descartar']);
         else if (!this.acceptReason(st, t)) items.push([kPick, 'Soltar']);
       } else if (st.type === 'backlog') {
-        if (waiting) items.push([kPick, 'Pegar ticket']);
+        if (waiting) items.push([kPick, 'Pegar']);
       } else if (st.item && !(st.type === 'merge' && (st.item.progress > 0 || st.conflict !== null))) {
         items.push([kPick, 'Pegar']);
+        if (this.canWork(p, st, true)) items.push(workItem());
+      } else if (st.type === 'coffee') {
+        items.push([kUse, 'Café']);
+      } else if (this.canWork(p, st, true)) {
+        items.push(workItem());
       }
-      if (st.type === 'coffee') items.push([kUse, 'Tomar café']);
-      else if (this.canWork(p, st, true)) {
-        const it = st.item;
-        const label = st.broken || st.type === 'router' ? 'Reiniciar (segure)'
-          : st.type === 'merge' ? 'Resolver (segure)'
-          : it?.step === 'review' ? 'Revisar (segure)'
-          : it?.step === 'fix' ? 'Corrigir (segure)' : 'Codar (segure)';
-        items.push([kUse, label]);
-      }
-      if (items.length) out.push({ p, st, items });
+      // melhoria da estação ao lado, sem Andar até a placa: [F] compra dali.
+      // (No mouse o esquerdo já é o trabalhar: só sugere quando não há o que
+      // trabalhar, que é exatamente quando segurar compra.)
+      const up = this.upgradePadFor(st);
+      if (up && (p.device !== 'mouse' || !this.canWork(p, st, true))) items.push([kBuy, 'Upgrade']);
+      if (items.length) out.push({ p, st, items: items.slice(0, 3) });
     }
     return out;
+  }
+
+  // melhoria comprável da estação mirada (placa amarela à distância)
+  upgradePadFor(st) {
+    if (!st || (this.mode !== 'playing' && this.mode !== 'lobby')) return null;
+    return this.world.pads.find((pd) =>
+      pd.kind === 'up' && pd.visible && !pd.block && !pd.busy &&
+      UPGRADE[pd.type]?.station === st.type) || null;
   }
 
   // ---------- tycoon: placas de compra ----------
@@ -477,10 +605,10 @@ export class Game {
   get liveEarn() { return this.mode === 'playing' || this.mode === 'results' ? Math.round(this.score * revenueMult(this.level.stage || 0)) : 0; }
 
   // atualiza preço, bloqueio e visibilidade de cada placa
-  refreshPads() {
+  refreshPads(cashOverride = null) {
     const c = this.company;
     const stage = c ? stageOf(c.valuation).id : 0;
-    if (!this.isClient) this.cashView = (c?.cash || 0) + this.liveEarn;
+    if (!this.isClient || cashOverride != null) this.cashView = cashOverride ?? (c?.cash || 0) + this.liveEarn;
     const builds = new Map(listBuilds(this.world.map).map((b) => ['build:' + b.id, b]));
     for (const pad of this.world.pads) {
       if (!c) { pad.visible = false; continue; }
@@ -500,9 +628,15 @@ export class Game {
     }
   }
 
-  // segurar "usar" em cima de uma placa compra (host decide; cliente só manda o input)
+  // Comprar: em cima da placa amarela, ou de frente pra estação quando ela
+  // tem upgrade disponível ([F] no prompt). Host decide; cliente só manda o input.
+  // Precedência igual à do prompt: mirando algo trabalhável, o F é o upgrade
+  // da estação; senão, é a placa sob o pé.
   padInput(p, s, dt) {
-    const pad = this.padUnder(p);
+    let pad = null;
+    const aimingWork = p.target && this.canWork(p, p.target, true);
+    if (aimingWork) pad = this.upgradePadFor(p.target);
+    if (!pad || pad.busy) pad = this.padUnder(p);
     if (!pad || pad.busy) return;
     const tryBuy = () => {
       if (pad.block) { this.sound('error'); this.say('pad' + p.index, `🔒 ${pad.block}`, pad.pos, '#ffb4b4'); return; }
@@ -513,7 +647,7 @@ export class Game {
     };
     // teclado e controle: a tecla Comprar (F / P / Num3 / Y) compra na hora
     if (s.buy) return tryBuy();
-    // mouse de uma mão: segurar o clique em cima da placa
+    // mouse de uma mão: segurar o clique (na placa ou na estação com upgrade)
     if (p.device !== 'mouse') return;
     const working = p.target && this.canWork(p, p.target, true);
     if (!s.use || working) return;
@@ -558,24 +692,27 @@ export class Game {
     for (const p of this.players) { p.baseMul = this.eff.moveSpeed; p.boostMul = this.eff.coffeeSpeed; }
   }
 
-  // setas mostrando onde o ticket na mão deve ir
+  guideFor(p) {
+    if (this.mode !== 'playing' || p.gone) return null;
+    const want = { code: ['desk', 'ai'], fix: ['desk', 'ai'], test: ['test'], review: ['review'], merge: ['merge'] };
+    const t = p.holding;
+    if (t && want[t.step]) {
+      return this.world.stations
+        .filter((st) => want[t.step].includes(st.type) && !st.item && !st.broken)
+        .sort((a, b) => a.pos.distanceToSquared(p.pos) - b.pos.distanceToSquared(p.pos))[0] || null;
+    }
+    return this.world.stations
+      .filter((st) => st.item?.touchers.has(p.index))
+      .sort((a, b) => a.pos.distanceToSquared(p.pos) - b.pos.distanceToSquared(p.pos))[0] || null;
+  }
+
   computeGuides() {
     if (this.mode !== 'playing') return [];
-    const want = { code: ['desk', 'ai'], fix: ['desk', 'ai'], test: ['test'], review: ['review'], merge: ['merge'] };
     const out = [];
-    const slots = new Map();
     for (const p of this.players) {
-      const t = p.holding;
-      if (!this.isMine(p) || !t || !want[t.step]) continue;
-      const cands = this.world.stations
-        .filter((st) => want[t.step].includes(st.type) && !st.item && !st.broken)
-        .sort((a, b) => a.pos.distanceToSquared(p.pos) - b.pos.distanceToSquared(p.pos))
-        .slice(0, 2);
-      for (const st of cands) {
-        const n = slots.get(st) || 0;
-        slots.set(st, n + 1);
-        out.push({ st, color: p.color, slot: n });
-      }
+      if (!this.isMine(p)) continue;
+      const st = this.guideFor(p);
+      if (st) out.push({ st, color: p.color, slot: 0 });
     }
     return out;
   }
@@ -703,9 +840,8 @@ export class Game {
     if (!st.holdsItems) return st.type === 'backlog' ? 'Não dá pra devolver pro backlog 😅' : 'Aqui não!';
     if (st.item) return 'Ocupado!';
     const need = `Ainda falta: ${t.stepDef.icon} ${t.stepDef.label}`;
-    if (st.type === 'test' && t.step !== 'test') return need;
-    if (st.type === 'merge' && t.step !== 'merge') return need;
-    if (st.type === 'ai' && t.step !== 'code' && t.step !== 'fix') return '🤖 A IA só implementa ou corrige';
+    const station = t.stepDef.station;
+    if (st.type !== station && !(st.type === 'ai' && station === 'desk')) return need;
     return null;
   }
 
@@ -809,21 +945,29 @@ export class Game {
     this.completeStep(t, st, '💻 Código pronto!');
   }
 
+  // contratempo com prazo estendido: a etapa extra não come o relógio original
+  extendDeadline(t) {
+    t.timeLimit += SETBACK_EXTRA;
+    t.timeLeft += SETBACK_EXTRA;
+  }
+
   reviewComplete(t, st) {
     const lv = this.level;
     if (t.escaped && Math.random() < (lv.reviewCatchChance ?? 0.5)) {
       t.escaped = false;
       t.insertSteps('fix', 'test');
+      this.extendDeadline(t);
       this.sound('testfail');
       this.emit('shake', { a: 0.2 });
-      this.floatAt('🔎 O review achou um bug!', st.pos, '#ffd166');
+      this.floatAt('🔎 Achou um bug! +15s', st.pos, '#ffd166');
       return;
     }
     if (!t.rejected && Math.random() < (lv.reviewRejectChance ?? 0)) {
       t.rejected = true;
       t.insertSteps('fix');
+      this.extendDeadline(t);
       this.sound('error');
-      this.floatAt(`📝 Changes requested: "${pick(NITPICKS)}"`, st.pos, '#ffd166');
+      this.floatAt(`📝 Changes requested +15s: "${pick(NITPICKS)}"`, st.pos, '#ffd166');
       return;
     }
     this.completeStep(t, st, '✅ LGTM! Aprovado');
@@ -868,9 +1012,10 @@ export class Game {
             st.conflict = 0;
             st.running = false;
             t.conflict = true;
+            this.extendDeadline(t);
             this.sound('conflict');
             this.emit('shake', { a: 0.35 });
-            this.floatAt('⚔️ CONFLITO DE MERGE!', st.pos, '#ff8c1a', true);
+            this.floatAt('⚔️ CONFLITO! +15s', st.pos, '#ff8c1a', true);
             continue;
           }
         }
@@ -887,10 +1032,11 @@ export class Game {
         t.escaped = true;
       } else {
         t.insertSteps('fix');
+        this.extendDeadline(t);
         st.failFlash = 1.5;
         this.sound('testfail');
         this.emit('shake', { a: 0.25 });
-        this.floatAt('❌ Testes falharam! 🐛', st.pos, '#ff8fa3', true);
+        this.floatAt('❌ Testes falharam! +15s 🐛', st.pos, '#ff8fa3', true);
         this.emit('sparkle', { x: st.pos.x, y: 0.9, z: st.pos.z, c: '#ff4d5e' });
         return;
       }
@@ -922,6 +1068,12 @@ export class Game {
     const gain = Math.round((base + tip + team) * mult * gold);
     this.score += gain;
     this.delivered++;
+    // 3 entregas limpas seguidas: o estagiário fecha uma etapa de graça (mérito, não sorte)
+    this.cleanStreak++;
+    if (this.cleanStreak >= 3) {
+      this.cleanStreak = 0;
+      this.internBoost();
+    }
     this.lastMergeAt = this.elapsed;
     t.touchers.forEach((i) => {
       const p = this.players[i];
@@ -931,7 +1083,6 @@ export class Game {
     });
     this.sound('deliver');
     this.floatAt(`+${gain}${team ? ' 🤝' : ''}${gold > 1 ? ' 💛x2' : ''}`, st.pos, '#6ee7a0', true);
-    if (team) this.toast(`🤝 Trabalho em equipe! <b>+${TEAM_BONUS}</b> — ${t.touchers.size} devs no ticket "${t.name}"`);
     this.emit('confetti', { x: st.pos.x, z: st.pos.z, n: Math.min(90, 40 + (mult - 1) * 24) });
     if (mult > prevMult) {
       // subiu de faixa: fanfarra mais aguda, tremida leve e o número acima do +N
@@ -944,19 +1095,25 @@ export class Game {
     this.endTicket(t, 'done');
   }
 
+  // triagem legítima: descartar custa pontos, mas não mata o combo
   trashTicket(p, t, st) {
     p.holding = null;
     this.trashed++;
+    this.cleanStreak = 0;
     const penalty = t.type === 'hotfix' ? t.def.penalty : TRASH_PENALTY; // hotfix no lixo não é saída fácil
     this.score = Math.max(0, this.score - penalty);
     this.sound('fail');
     this.floatAt(`🗑️ Won't fix! -${penalty}`, st.pos, '#ff8fa3');
-    this.breakCombo(st.pos, '🗑️ Combo quebrado');
     this.endTicket(t, 'failed');
   }
 
   drinkCoffee(p) {
     if (p.boost > 2) return;
+    // café cura reunião (temático e dá motivo pra usar o canto do mapa)
+    if (p.meeting > 0) {
+      p.meeting = 0;
+      this.floatAt('☕ Reunião? Que reunião?', p.pos, '#ffd166', true);
+    }
     p.boost = this.eff.coffeeTime;
     p.stats.coffee++;
     this.emit('squash', { i: p.index });
@@ -972,7 +1129,9 @@ export class Game {
     this.nextSpawn -= dt;
     if (this.spawned < lv.maxOrders && live.length < lv.maxActive && (this.nextSpawn <= 0 || live.length === 0)) {
       this.spawnOrder();
-      this.nextSpawn = lv.spawnEvery[0] + Math.random() * (lv.spawnEvery[1] - lv.spawnEvery[0]);
+      // rush final: últimos 60s com fila mais rápida (clímax em vez de despachar resto)
+      const rush = this.timeLeft < 60 ? 0.7 : 1;
+      this.nextSpawn = (lv.spawnEvery[0] + Math.random() * (lv.spawnEvery[1] - lv.spawnEvery[0])) * rush;
     }
     for (const t of live) {
       t.timeLeft -= dt;
@@ -1035,6 +1194,7 @@ export class Game {
   expire(t) {
     const penalty = t.def.penalty ?? EXPIRE_PENALTY;
     this.failed++;
+    this.cleanStreak = 0;
     this.emit('shake', { a: 0.2 });
     this.score = Math.max(0, this.score - penalty);
     this.sound('fail');
@@ -1048,7 +1208,18 @@ export class Game {
     this.endTicket(t, 'failed');
   }
 
-  // ---------- caos ----------
+  // ---------- caos (com 5s de telegrafia: drama, não loteria) ----------
+  warnAnchor(k) {
+    if (k === 'wifi') return this.station('router')?.pos;
+    if (k === 'hallucinate') return this.world.stations.find((s) => s.type === 'ai')?.pos;
+    if (k === 'prodBug') return this.station('server')?.pos;
+    if (k === 'meeting') {
+      const free = this.players.filter((p) => !p.gone && p.meeting <= 0);
+      return free.length ? pick(free).pos : null;
+    }
+    return null;
+  }
+
   updateEvents() {
     // bugs que escaparam estouram em produção
     for (let i = this.pendingProd.length - 1; i >= 0; i--) {
@@ -1059,10 +1230,21 @@ export class Game {
     }
     if (this.timeLeft < 25) return; // sem sacanagem no finalzinho
     for (const k of Object.keys(this.evNext)) {
-      if (this.elapsed < this.evNext[k]) continue;
-      const [a, b] = this.level.events[k];
-      this.evNext[k] = this.elapsed + rand(a, b);
-      this.fireEvent(k);
+      if (this.elapsed >= this.evNext[k]) {
+        const [a, b] = this.level.events[k];
+        this.evNext[k] = this.elapsed + rand(a, b);
+        delete this.evWarned[k];
+        this.fireEvent(k);
+        continue;
+      }
+      // 5s antes: avisa onde vai doer pra dar tempo de posicionar o time
+      if (!this.evWarned[k] && this.evNext[k] - this.elapsed < 5) {
+        this.evWarned[k] = true;
+        const at = this.warnAnchor(k);
+        const txt = { wifi: '📶 Wi-Fi instável...', hallucinate: '🤖 IA estranha...', meeting: '📅 Chefe olhando a agenda...', prodBug: '🔥 Deploy com cheiro de problema...' }[k];
+        if (at && txt) this.floatAt(txt, at, '#ffd166');
+        this.sound('tick');
+      }
     }
   }
 
@@ -1077,22 +1259,20 @@ export class Game {
       this.sound('glitch');
       this.emit('shake', { a: 0.25 });
       this.floatAt('🤖💥 ALUCINANDO!', st.pos, '#ff8fa3', true);
-      this.toast('🤖 O agente de IA começou a alucinar! Segure <b>USAR</b> nele para reiniciar.', 3500);
     } else if (k === 'meeting') {
       const free = this.players.filter((p) => !p.gone && p.meeting <= 0);
       if (!free.length) return;
       const p = pick(free);
       p.meeting = (this.multi ? 7 : 5) * this.eff.meetingMult;
       this.sound('meeting');
-      this.floatAt('📅 Reunião surpresa!', p.pos, '#8ecae6', true);
-      this.toast(`📅 <b style="color:${p.color}">${p.look.name}</b> foi puxado pra uma reunião que podia ser um e-mail!`, 3500);
+      this.floatAt(`📅 ${p.look.name} em reunião!`, p.pos, '#8ecae6', true);
     } else if (k === 'wifi') {
       if (this.wifiDown || !this.station('router')) return;
       this.wifiDown = true;
       this.station('router').repair = 0;
       this.sound('wifi');
       this.emit('shake', { a: 0.15 });
-      this.emit('banner', { text: '📶 Wi-Fi caiu!', sub: 'IA e testes offline — reinicie o roteador', ms: 1800 });
+      this.emit('banner', { text: '📶 Wi-Fi caiu!', ms: 1500 });
     } else if (k === 'prodBug') {
       this.triggerProdBug(null);
     }
@@ -1114,7 +1294,7 @@ export class Game {
     this.incident = Math.max(0, this.incident - 1);
     if (this.incident === 0) {
       this.drainT = 0;
-      if (ok) this.emit('banner', { text: '✅ Produção de pé!', sub: 'Ninguém viu nada 👀', ms: 1500 });
+      if (ok) this.emit('banner', { text: '✅ Produção de pé!', ms: 1200 });
     }
   }
 
@@ -1161,18 +1341,21 @@ export class Game {
       this.cache = CACHE_TIME;
       this.sound('fixed');
       this.emit('banner', { text: '⚡ CACHE QUENTE', sub: `mesas em dobro por ${CACHE_TIME}s`, ms: 1800 });
-    } else if (k === 'intern') {
-      // o estagiário fecha de graça a etapa de um ticket que está em andamento
-      const cands = this.tickets.filter((t) => t.state === 'active' && t.stepIndex < t.steps.length - 1 &&
-        (t.step === 'code' || t.step === 'fix' || t.step === 'review'));
-      if (!cands.length) return;
-      const t = pick(cands);
-      const done = t.stepDef;
-      t.progress = 0;
-      this.completeStep(t, { pos: this.holderPos(t) }, `🧑‍🎓 Estagiário: ${done.label}!`);
-      this.sound('robot');
-      this.toast(`🧑‍🎓 O estagiário fechou <b>${done.icon} ${done.label}</b> de "${t.name}" — de graça!`);
     }
+  }
+
+  // estagiário por mérito (streak), não por sorte: fecha de graça a etapa de
+  // um ticket em andamento
+  internBoost() {
+    const cands = this.tickets.filter((t) => t.state === 'active' && t.stepIndex < t.steps.length - 1 &&
+      (t.step === 'code' || t.step === 'fix' || t.step === 'review'));
+    if (!cands.length) return;
+    const t = pick(cands);
+    const done = t.stepDef;
+    t.progress = 0;
+    this.completeStep(t, { pos: this.holderPos(t) }, `🧑‍🎓 Estagiário: ${done.label}!`);
+    this.sound('robot');
+    this.toast(`🧑‍🎓 3 seguidas! O estagiário fechou <b>${done.icon} ${done.label}</b> de "${t.name}" — de graça!`);
   }
 
   // ---------- visual das estações ----------
@@ -1272,7 +1455,7 @@ export class Game {
       p: this.players.map((p) => [r2(p.pos.x), r2(p.pos.z), r2(p.angle), r2(p.vel.x), r2(p.vel.z), p.working ? 1 : 0, p.holding?.id || 0, p.boost > 0 ? 1 : 0, r2(p.meeting)]),
       k: live.map((t) => [t.id, t.type, t.name, t.stepIndex, r2(t.progress), r2(t.timeLeft), t.state,
         t.holder ? (t.holder.kind === 'player' ? 'p' + t.holder.ref.index : 's' + t.holder.ref.index) : '',
-        t.steps.map((s) => STEP_CODE[s]).join(''), t.conflict ? 1 : 0]),
+        t.steps.map((s) => STEP_CODE[s]).join(''), [...t.touchers], t.conflict ? 1 : 0]),
       s: stations.map((s) => (s.running ? 1 : 0) | (s.flash > 0 ? 2 : 0) | (s.broken ? 4 : 0) | (s.conflict !== null ? 8 : 0) | (s.failFlash > 0 ? 16 : 0)),
       a: stations.filter((s) => s.repair > 0 || s.conflict !== null).map((s) => [s.index, r2(s.conflict ?? s.repair)]),
       e: this.outbox,
@@ -1298,7 +1481,7 @@ export class Game {
     // tickets
     const seen = new Set();
     this.world.stations.forEach((st) => { st.item = null; });
-    for (const [id, type, name, si, pr, tl, state, h, steps, flags] of s.k) {
+    for (const [id, type, name, si, pr, tl, state, h, steps, touchers, flags] of s.k) {
       seen.add(id);
       let t = this.ticketMap.get(id);
       if (!t) {
@@ -1308,7 +1491,7 @@ export class Game {
         this.tickets.push(t);
       }
       if (steps && steps !== t.steps.map((x) => STEP_CODE[x]).join('')) t.steps = steps.split('').map((c) => CODE_STEP[c]);
-      t.stepIndex = si; t.progress = pr; t.timeLeft = tl; t.conflict = !!flags;
+      t.stepIndex = si; t.progress = pr; t.timeLeft = tl; t.touchers = new Set(touchers || []); t.conflict = !!flags;
       if (t.state !== state) {
         if (state === 'done' || state === 'failed') this.endTicket(t, state);
         t.state = state;

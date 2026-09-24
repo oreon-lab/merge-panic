@@ -176,7 +176,10 @@ export class Player {
     m.legs[1].rotation.x = -swing;
 
     // inclinação
-    m.torso.rotation.x = THREE.MathUtils.lerp(m.torso.rotation.x, sf * 0.12 + (this.dashT > 0 ? 0.35 : 0), 1 - Math.exp(-12 * dt));
+    const poseK = 1 - Math.exp(-12 * dt);
+    m.torso.rotation.x = THREE.MathUtils.lerp(m.torso.rotation.x, sf * 0.12 + (this.working ? 0.08 : 0) + (this.dashT > 0 ? 0.35 : 0), poseK);
+    m.torso.rotation.y = THREE.MathUtils.lerp(m.torso.rotation.y, s * 0.045 * sf, poseK);
+    m.torso.rotation.z = THREE.MathUtils.lerp(m.torso.rotation.z, -s * 0.04 * sf, poseK);
 
     // braços
     const now = performance.now() / 1000;
@@ -186,11 +189,13 @@ export class Player {
     } else if (this.working) {
       aL = -1.25 + Math.sin(now * 28) * 0.22;
       aR = -1.25 + Math.sin(now * 28 + Math.PI) * 0.22;
+      zL = -0.18; zR = 0.18;
     } else if (this.holding) {
       aL = aR = -1.3 + Math.sin(this.t) * 0.05 * sf;
       zL = -0.05; zR = 0.05;
     } else {
-      aL = -swing * 0.9; aR = swing * 0.9;
+      const idle = Math.sin(now * 1.7 + this.index) * 0.025 * (1 - sf);
+      aL = -swing * 0.9 + idle; aR = swing * 0.9 - idle;
     }
     const lerpK = 1 - Math.exp(-20 * dt);
     m.arms[0].rotation.x = THREE.MathUtils.lerp(m.arms[0].rotation.x, aL, lerpK);
@@ -202,6 +207,7 @@ export class Player {
     const headNod = this.working ? Math.sin(now * 14) * 0.08 : Math.sin(now * 1.3 + this.index) * 0.04;
     m.head.rotation.x = headNod;
     m.head.rotation.y = this.working ? 0 : Math.sin(now * 0.7 + this.index * 2) * 0.12 * (1 - sf);
+    m.head.rotation.z = THREE.MathUtils.lerp(m.head.rotation.z, -s * 0.025 * sf, poseK);
 
     // piscar
     this.blinkT -= dt;

@@ -105,11 +105,11 @@ class App {
   newGame() {
     this.game?.stopDemo();
     this.game?.dispose();
-    // um escritório só; a dificuldade vem do estágio da empresa
-    this.game = new Game(this, sprintParams(this.activeCompany), this.roster, this.role === 'client' ? 'client' : this.role);
+    // um escritório só; a dificuldade vem do estágio da empresa + headcount
+    this.game = new Game(this, sprintParams(this.activeCompany, this.roster.length || 1), this.roster, this.role === 'client' ? 'client' : this.role);
     this.rig.setMap(this.game.world.W, this.game.world.H);
     this.ui.showHud(false);
-    this.ui.setRoom(this.net?.code || '');
+    this.ui.setPlaying(false);
     if (this.role === 'host') { this.gen++; this.broadcastLobby(); }
     this.refreshHQ();
   }
@@ -197,6 +197,9 @@ class App {
     this.setMenuBg(false);
     this.screens.hide();
     this.refreshHQ();
+    if (!save.tutorialSeen && this.role !== 'client') {
+      this.ui.toast('🧊 <b>Bem-vindo!</b> Escolha seu controle pra entrar no time e aperte <b>Jogar</b> — eu guio o resto.', 5000);
+    }
   }
 
   refreshHQ() {
@@ -210,7 +213,7 @@ class App {
       freeDevices: [...Object.keys(KB_SCHEMES), 'mouse'].filter((d) => !mine.includes(d)),
       code: this.net?.code || '', peers: this.peers.size + 1,
       canStart: g.players.length > 0 && this.role !== 'client',
-      levelName: g.level.name, offline: this.offline,
+      levelName: g.level.name, offline: this.offline, investment: this.nextInvestment(),
     });
     if (this.panel) this.renderPanel();
   }
@@ -240,6 +243,15 @@ class App {
       case 'settings':
         sc.settings({ muted: sfx.muted, profile: this.profile, code: identity.code(), showCode: st.showCode, msg: st.msg });
         break;
+      case 'brief': {
+        const ctrls = this.game.players.filter((p) => p.owner === this.myId).map((p) => {
+          const k = this.input.hint(p.device);
+          const who = p.device === 'mouse' ? '🖱️ Mouse' : p.device?.startsWith('gp') ? '🎮 Controle' : `⌨️ ${p.device === 'kbA' ? 'Teclado 1' : p.device === 'kbB' ? 'Teclado 2' : 'Teclado 3'}`;
+          return { who, move: k[0], pick: k[1], use: k[2] };
+        });
+        sc.brief({ controls: ctrls, levelName: this.game.level.name, stars: this.game.level.stars });
+        break;
+      }
     }
   }
 
@@ -262,9 +274,20 @@ class App {
       if (['room', 'help', 'settings'].includes(a)) this.openPanel(a);
       return;
     }
-    if (a === 'back' && this.panel) { this.closePanel(); return; }
+    if (a === 'back' && this.panel) {
+      if (this.panel === 'brief') { this.panel = null; this.screens.hide(); this.refreshHQ(); return; }
+      this.closePanel(); return;
+    }
 
     switch (s) {
+      case 'brief':
+        if (a === 'begin') {
+          save.tutorialSeen = true;
+          this.panel = null;
+          this.screens.hide();
+          this.beginSprint();
+        }
+        break;
       case 'room':
         if (a === 'create' && !this.panelState.busy) this.createRoom();
         if (a === 'join' && !this.panelState.busy) {
@@ -300,16 +323,26 @@ class App {
   startSprint() {
     const g = this.game;
     if (g.mode !== 'lobby' || this.role === 'client') return;
-    if (!g.players.length) { sfx.play('error'); this.ui.toast('👋 Primeiro entre no time: aperte <b>PEGAR</b> (E, O, Shift dir. ou A no controle).'); return; }
+    if (!g.players.length) { sfx.play('error'); this.ui.toast('🎮 <b>Monte o time:</b> aperte <b>E</b>, <b>O</b>, <b>Shift dir.</b> ou <b>A</b> no controle pra entrar.'); return; }
+    // quebra-gelo: briefing de 30s só na primeira vez
+    if (!save.tutorialSeen) { this.openPanel('brief'); return; }
+    this.beginSprint();
+  }
+
+  beginSprint() {
+    const g = this.game;
+    if (g.mode !== 'lobby' || this.role === 'client') return;
+    // o time pode ter mudado no lobby: recalibra a dificuldade pro headcount atual
+    if (g.players.length !== (g.level.nPlayers || 4)) this.newGame();
     this.panel = null;
     this.screens.hide();
-    g.stopDemo();
-    g.start();
+    this.game.stopDemo();
+    this.game.start();
     if (this.offline || !this.company) return;
     const pids = [...new Set(this.roster.map((r) => r.pid).filter(Boolean))];
-    g.sprintReq = api.sprintStart(pids)
+    this.game.sprintReq = api.sprintStart(pids, this.game.players.length)
       .then((r) => r.sprintId)
-      .catch((e) => { g.sprintError = e.message; return null; });
+      .catch((e) => { this.game.sprintError = e.message; return null; });
   }
 
   // fim de sprint: o servidor calcula o pagamento e devolve a empresa atualizada
@@ -321,6 +354,7 @@ class App {
     if (!sprintId) return fail(g.sprintError || 'Sprint não registrada no servidor.');
     try {
       const res = await api.sprintEnd({ sprintId, score: r.score, delivered: r.delivered, failed: r.failed, combo: r.combo });
+      save.logSprint({ score: r.score, delivered: r.delivered, failed: r.failed, trashed: r.trashed, players: g.players.length, stars: res.stars });
       this.company = res.company;
       this.profile = res.profile;
       const eco = {
@@ -333,19 +367,25 @@ class App {
     }
   }
 
-  // "quase dá pra comprar": o gancho pra próxima sprint
-  teaseFor() {
+  nextInvestment() {
     const g = this.game;
-    g.refreshPads();
+    const cash = this.activeCompany?.cash || 0;
+    g.refreshPads(cash);
     const pads = g.world.pads.filter((p) => p.visible && (!p.block || p.block.startsWith('Dinheiro'))).sort((a, b) => a.price - b.price);
-    if (!pads.length) return '';
+    if (!pads.length) return null;
     const can = pads.filter((p) => p.affordable);
-    if (can.length) {
-      const p = can[can.length - 1];
-      return `🛒 Dá pra comprar <b>${p.icon} ${p.name}</b>! Pise na placa amarela no HQ e segure <b>Trabalhar</b>.`;
-    }
-    const p = pads[0];
-    return `🎯 Faltam <b>${fmtMoney(p.price - (this.company?.cash || 0))}</b> para ${p.icon} ${p.name}`;
+    const p = can.length ? can[can.length - 1] : pads[0];
+    return {
+      icon: p.icon, name: p.name, price: p.price, ready: p.affordable,
+      remaining: Math.max(0, p.price - cash), progress: Math.min(100, Math.max(0, cash / p.price * 100)),
+    };
+  }
+
+  teaseFor() {
+    const p = this.nextInvestment();
+    if (!p) return '';
+    if (p.ready) return `🛒 <b>${p.icon} ${p.name}</b> está disponível! Volte ao HQ e compre na placa amarela.`;
+    return `🎯 Faltam <b>${fmtMoney(p.remaining)}</b> para ${p.icon} <b>${p.name}</b>`;
   }
 
   // chamado pelo evento 'payout' (host e convidados)
@@ -479,7 +519,7 @@ class App {
       this.gen = -1;
       this.newGame();
       this.enterHQ();
-      this.ui.toast(`🌐 Você entrou na sala <b>${net.code}</b>. Aperte PEGAR pra entrar no time!`, 3500);
+      this.ui.toast(`🌐 Você entrou na sala <b>${net.code}</b>. Escolha seu controle pra entrar no time!`, 3500);
     } catch (e) {
       this.net = null;
       history.replaceState(null, '', location.pathname);
@@ -513,7 +553,6 @@ class App {
     this.peers.clear();
     this.hostCompany = null;
     this.hostCompanyKey = null;
-    this.ui.setRoom('');
     history.replaceState(null, '', location.pathname);
   }
 
@@ -534,6 +573,12 @@ class App {
       g.addPlayer({ owner: id, device: d.device });
       this.refreshHQ();
       this.broadcastLobby();
+    } else if (d.t === 'removep') {
+      if (g.mode !== 'lobby') return;
+      const next = this.roster.filter((r) => !(r.owner === id && r.device === d.device));
+      if (next.length === this.roster.length) return;
+      this.roster = next;
+      this.newGame();
     } else if (d.t === 'in') {
       g.applyInput(id, d);
     }
@@ -595,15 +640,15 @@ class App {
       rig.setLayout({});
       rig.cinematic((g.bots || []).map((p) => p.pos));
     } else if (g.mode === 'lobby') {
-      // o escritório fica entre o topo (empresa) e a base (time + dock); a loja abre à direita
-      rig.setLayout({ top: 96, bottom: w < 800 ? 250 : 200 });
+      rig.setLayout({ top: w < 800 ? 220 : 190, bottom: w < 800 ? 250 : 200 });
       rig.overview(0.5);
     } else {
       rig.setLayout({ top: w < 900 ? 190 : 150 });
       const active = g.players.filter((p) => !p.gone);
       const mine = active.filter((p) => g.isMine(p));
       const focus = this.role === 'local' || !mine.length ? active : mine;
-      rig.follow(focus.map((p) => p.pos), { minHW: 5.4, minHH: 3.7 });
+      const points = focus.flatMap((p) => [p.pos, g.guideFor(p)?.pos].filter(Boolean));
+      rig.follow(points, { minHW: 5.4, minHH: 3.7 });
     }
     rig.update(dt, w, h);
   }
@@ -666,13 +711,21 @@ class App {
     if (draw) this.render();
   }
 
-  // PEGAR em qualquer dispositivo livre entra no time
+  // Apertar o botão de ação num controle livre entra no time (estilo arcade)
   joinPlayers() {
     const inp = this.input, g = this.game;
     for (const d of inp.devices()) {
       if (!inp.get(d).pick) continue;
       const mine = this.roster.some((r) => r.owner === this.myId && r.device === d);
-      if (mine || this.roster.length >= 4) continue;
+      if (mine) {
+        if (this.role === 'client') this.net.toHost({ t: 'removep', device: d });
+        else {
+          this.roster = this.roster.filter((r) => !(r.owner === this.myId && r.device === d));
+          this.newGame();
+        }
+        return;
+      }
+      if (this.roster.length >= 4) continue;
       if (this.role === 'client') {
         this.net.toHost({ t: 'addp', device: d, pid: this.profile?.id, name: this.profile?.name });
       } else {

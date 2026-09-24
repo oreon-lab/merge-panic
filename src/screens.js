@@ -22,14 +22,15 @@ const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}
 export const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // barra do estágio da empresa (from = valuation antes, pra animar a subida)
+// Só ícone + nome + barra. O "faltam R$ X" era filler ansioso em toda tela.
 function stageBar(company, from = null) {
   const pctOf = (v) => {
     const st = stageOf(v), nx = nextStage(v);
     return nx ? Math.min(100, ((v - st.at) / (nx.at - st.at)) * 100) : 100;
   };
-  const st = stageOf(company.valuation), nx = nextStage(company.valuation);
+  const st = stageOf(company.valuation);
   const start = from != null && stageOf(from).id === st.id ? pctOf(from) : pctOf(company.valuation);
-  return `<div class="stage-bar"><div class="sb-top"><span>${st.icon} <b>${st.name}</b></span><small>${nx ? `${fmtMoney(nx.at - company.valuation)} até ${nx.icon} ${nx.name}` : 'topo do mercado!'}</small></div>
+  return `<div class="stage-bar"><div class="sb-top"><span>${st.icon} <b>${st.name}</b></span></div>
     <div class="sb-track"><div style="width:${start}%" data-to="${pctOf(company.valuation)}"></div></div></div>`;
 }
 
@@ -199,7 +200,7 @@ export class Screens {
   // =================================================================
   // HQ: moldura fixa por cima do escritório 3D
   // =================================================================
-  hq({ company, role, players, names, myId, freeDevices, code, peers, canStart, levelName, offline }) {
+  hq({ company, role, players, names, myId, freeDevices, code, peers, canStart, levelName, offline, investment }) {
     const co = company
       ? `<div class="hq-co"><div class="hq-ic">${stageOf(company.valuation).icon}</div>
           <div class="hq-coinfo"><b>${esc(company.name)}</b>${role === 'client' ? '<small class="guest">HQ do host</small>' : ''}${stageBar(company)}</div>
@@ -207,23 +208,41 @@ export class Screens {
       : `<div class="hq-co"><div class="hq-ic">🏚️</div><div class="hq-coinfo"><b>${offline ? 'Modo offline' : 'Conectando...'}</b><small>${offline ? 'o progresso não será salvo' : ''}</small></div></div>`;
     const room = code
       ? `<button class="hq-room" data-nav="room">${icon('globe', 18)} Sala <b>${code}</b><small>${role === 'host' ? `${peers} PC${peers > 1 ? 's' : ''}` : 'convidado'}</small></button>` : '';
+    // Seleção de time estilo arcade: slots vazios são vagas, o primeiro
+    // vazio vira "PRESS TO JOIN" com o botão de cada controle à mostra.
+    // Aqui o botão de ação ENTRA no time — chamar de "PEGAR" confundia
+    // com o pegar ticket lá dentro da sprint.
+    const JOIN_META = { kbA: { key: 'E', label: '⌨️ 1 · WASD' }, kbB: { key: 'O', label: '⌨️ 2 · IJKL' }, kbC: { key: 'Shift', label: '⌨️ 3 · Setas' }, mouse: { key: 'Dir.', label: '🖱️ mouse' } };
+    const freeSet = new Set(freeDevices || []);
+    const chips = [...Object.entries(JOIN_META)].filter(([id]) => freeSet.has(id)).map(([, m]) => `<span><kbd>${m.key}</kbd>${m.label}</span>`).join('');
+    const padChip = `<span><kbd>A</kbd>🎮 controle</span>`;
+    const joinKeys = `<div class="join-keys">${chips}${padChip}</div>`;
+    const firstEmpty = [0, 1, 2, 3].findIndex((i) => !players[i]);
     const slots = [0, 1, 2, 3].map((i) => {
       const p = players[i];
       const look = PLAYER_LOOKS[i];
-      if (!p) return `<div class="tm empty"><b>P${i + 1}</b><small>aperte PEGAR</small></div>`;
+      if (!p) {
+        if (i === firstEmpty && firstEmpty !== -1) return `<div class="tm empty next"><b>＋ Entrar no time</b>${joinKeys}<small>escolha seu controle</small></div>`;
+        return `<div class="tm empty"><b>P${i + 1}</b><small>vaga livre</small></div>`;
+      }
       const mine = p.owner === myId;
-      const k = hintOf(p.device);
+      const leaveKey = p.device === 'mouse' ? 'Dir.' : p.device?.startsWith('gp') ? 'A' : KB_SCHEMES[p.device]?.hint[1] || 'ação';
       return `<div class="tm" style="--c:${look.color}"><div class="tm-top"><b>${look.name}</b><span>${esc(names[i] || '')}</span></div>
-        <small>${mine ? `${DEVICE_LABEL(p.device)} · <kbd>${k[1]}</kbd> pegar · <kbd>${k[2]}</kbd> trabalhar · <kbd>${k[4]}</kbd> comprar` : '🌐 outro PC'}</small></div>`;
+        <small>${mine ? `${DEVICE_LABEL(p.device)} · ${esc(leaveKey)} para sair` : '🌐 outro PC'}</small></div>`;
     }).join('');
-    const join = freeDevices.map((id) => (id === 'mouse' ? '<kbd>Dir.</kbd> mouse' : `<kbd>${hintOf(id)[1]}</kbd> ${hintOf(id)[0]}`)).join(' · ') + ' · <kbd>A</kbd> controle';
-    const tip = !players.length ? `👋 <b>Entre no time:</b> ${join}`
-      : role === 'client' ? '⏳ O host escolhe a sprint. Enquanto isso, passeie pelo HQ!'
-      : `✅ <b>Time pronto!</b> <kbd>Enter</kbd> começa a sprint · 🟨 pise numa placa amarela e aperte <kbd>F</kbd> <kbd>P</kbd> <kbd>Y</kbd> pra comprar`;
+    const tip = !players.length ? `<span class="step on">1</span> 🎮 <b>Monte seu time!</b> escolha o controle e entre &nbsp;→&nbsp; <span class="step">2</span> <kbd>Enter</kbd> / <b>Jogar</b>`
+      : role === 'client' ? '⏳ O host escolhe a sprint.'
+      : `<span class="step done">✓</span> <b>Time pronto!</b> <span class="step on">2</span> <kbd>Enter</kbd> começa · + controles ainda podem entrar`;
+    const goal = company && investment ? `<div class="hq-goal ${investment.ready ? 'ready' : ''}">
+      <span class="hq-goal-label">Próximo investimento</span>
+      <b>${investment.icon} ${esc(investment.name)}</b>
+      <small>${investment.ready ? `Disponível agora · ${fmtMoney(investment.price)}` : `Faltam ${fmtMoney(investment.remaining)} · meta ${fmtMoney(investment.price)}`}</small>
+      <span class="hq-goal-track"><i style="width:${Math.round(investment.progress)}%"></i></span>
+    </div>` : '';
     this.chrome.className = 'hq' + (this.dockFocus ? ' dock-focus' : '');
     this.chrome.innerHTML = `
       <div class="hq-top">${co}<div class="hq-right">${room}</div></div>
-      <div class="hq-tip">${tip}</div>
+      <div class="hq-tip"><span class="hq-step">${tip}</span>${goal}</div>
       <div class="hq-bottom">
         <div class="team">${slots}</div>
         <div class="dock">
@@ -232,7 +251,6 @@ export class Screens {
           <button class="dk" data-nav="help">${icon('book', 22)}<span>Ajuda</span></button>
           <button class="dk" data-nav="settings">${icon('gear', 22)}<span>Ajustes</span></button>
         </div>
-        <div class="dock-hint">${this.dockFocus ? '<kbd>←</kbd><kbd>→</kbd> escolher · <kbd>Enter</kbd> abrir · <kbd>Esc</kbd> voltar a andar' : '<kbd>Tab</kbd> menu pelo teclado · <kbd>Enter</kbd> jogar · <kbd>M</kbd> som'}</div>
       </div>`;
     if (!this.visible) {
       const keep = this.dockFocus ? this.items[this.index]?.dataset.nav : null;
@@ -243,6 +261,29 @@ export class Screens {
   hideChrome() { this.chrome.className = 'hq hidden'; this.dockFocus = false; }
 
   // =================================================================
+  // Briefing da primeira sprint: o quebra-gelo (30s de leitura, 1 botão)
+  // =================================================================
+  brief({ controls = [], levelName = '', stars = [] }) {
+    const ctrls = controls.length
+      ? controls.map((c) => `<div class="bctl"><b>${esc(c.who)}</b><span><kbd>${esc(c.move)}</kbd> mover · <kbd>${esc(c.pick)}</kbd> pegar · <kbd>${esc(c.use)}</kbd> segurar p/ trabalhar</span></div>`).join('')
+      : '<div class="bctl"><b>Teclado/mouse/controle</b><span>as teclas aparecem sobre a estação que você mirar</span></div>';
+    const goal = stars.length ? `<div class="bgoal">⭐ Meta: <b>${stars[0]}</b> pts pra 1ª estrela · quanto mais rápido entregar, mais gorjeta</div>` : '';
+    this.show('brief', frame({
+      icon: 'play', title: 'Sua primeira sprint', sub: levelName,
+      body: `
+        <div class="bflow">
+          <div class="bfs"><i>📋</i><b>1 · Pegue</b><small>vá ao Backlog roxo</small></div><span>›</span>
+          <div class="bfs"><i>💻</i><b>2 · Leve e segure</b><small>siga a ▼ até a mesa</small></div><span>›</span>
+          <div class="bfs"><i>🔀</i><b>3 · Entregue</b><small>Merge verde = pontos</small></div>
+        </div>
+        ${goal}
+        <div class="bctls">${ctrls}</div>
+        <p class="hint">🧊 Quebra-gelo: vou te guiar passo a passo lá dentro. Sem caos nos primeiros segundos — prometo.</p>`,
+      foot: `<button class="btn primary big" data-nav="begin">${icon('play', 18)} Começar!</button>`,
+    }), { focus: 1 });
+  }
+
+  // =================================================================
   // Sala online
   // =================================================================
   room({ role, code = '', link = '', peers = 0, busy = '', error = '', typed = '' }) {
@@ -250,7 +291,7 @@ export class Screens {
     if (role === 'host') {
       body = `<div class="room-big"><small>Código da sala</small><b class="code xl">${code}</b>
           <div class="row"><input class="o-link" readonly value="${esc(link)}"><button class="btn primary" data-nav="copy">${icon('copy', 18)} Copiar link</button></div>
-          <p>🟢 <b>${peers} PC${peers > 1 ? 's' : ''}</b> na sala. Quem entrar aparece andando no seu HQ e entra no time apertando PEGAR.</p></div>`;
+          <p>🟢 <b>${peers} PC${peers > 1 ? 's' : ''}</b> na sala. Quem entrar aparece andando no seu HQ — é só escolher o controle e entrar no time.</p></div>`;
     } else if (role === 'client') {
       body = `<div class="room-big"><small>Você está na sala</small><b class="code xl">${code}</b>
           <p>Você joga no HQ do host: a empresa, as compras e a escolha da sprint são dele. Seu histórico de dev fica salvo no <b>seu</b> perfil.</p></div>`;
@@ -310,13 +351,13 @@ export class Screens {
     const kb = Object.values(KB_SCHEMES).map((s) => `<tr><td>⌨️ ${s.name}</td><td><kbd>${s.hint[0]}</kbd></td><td><kbd>${s.hint[1]}</kbd></td><td><kbd>${s.hint[2]}</kbd></td><td><kbd>${s.hint[3]}</kbd></td><td><kbd>${s.hint[4]}</kbd></td></tr>`).join('');
     const chaos = [
       ['🤖', 'Agente de IA', 'Codifica sozinho e rápido, mas às vezes deixa bug escondido.'],
-      ['❌', 'Testes falham', 'O ticket ganha uma etapa 🔧 Corrigir. Conserte e teste de novo.'],
-      ['📝', 'Changes requested', 'O review pode devolver o ticket com um "nit".'],
-      ['⚔️', 'Conflito de merge', 'Segure Trabalhar no Merge. Evite merges colados!'],
+      ['❌', 'Testes falham', 'O ticket ganha 🔧 Corrigir + 15s de prazo. Conserte e teste de novo.'],
+      ['📝', 'Changes requested', 'O review pode devolver o ticket com um "nit" (+15s de prazo).'],
+      ['⚔️', 'Conflito de merge', 'Segure Trabalhar no Merge (+15s). Evite merges colados!'],
       ['🚨', 'Bug em produção', 'Bug que escapou vira Hotfix. Pontos escorrem até resolver.'],
       ['📶', 'Wi-Fi caiu', 'IA e testes param. Reinicie o roteador.'],
       ['💥', 'IA alucinando', 'Segure Trabalhar no agente para reiniciar.'],
-      ['📅', 'Reunião surpresa', 'Um dev fica preso. O time cobre!'],
+      ['📅', 'Reunião surpresa', 'Um dev fica preso. O time cobre — ou ele toma um café e sai!'],
     ].map(([i, t, d]) => `<div class="chaos"><div class="ch-i">${i}</div><div><b>${t}</b><p>${d}</p></div></div>`).join('');
     this.show('help', frame({
       icon: 'book', title: 'Como jogar', cls: 'wide',
@@ -339,15 +380,16 @@ export class Screens {
           <h3>2 · A empresa</h3>
           <ul class="tips">
             <li>💰 Toda sprint vira receita: pontos + bônus por estrela. Sprints mais difíceis pagam mais.</li>
-            <li>🟨 <b>Placas de compra</b>: pise numa placa amarela e aperte <b>Comprar</b> (<kbd>F</kbd> / <kbd>P</kbd> / <kbd>Num3</kbd> / <kbd>Y</kbd> no controle). Mesas, agentes de IA e melhorias aparecem na hora — dá pra comprar até no meio da sprint com o dinheiro que está entrando.</li>
+            <li>🟨 <b>Placas de compra</b>: pise numa placa amarela e aperte <b>Comprar</b> (<kbd>F</kbd> / <kbd>P</kbd> / <kbd>Num3</kbd> / <kbd>Y</kbd> no controle). Upgrade de estação dá pra comprar de frente pra ela ([F] Upgrade no prompt), sem Andar até a placa. Dá pra comprar até no meio da sprint com o dinheiro que está entrando.</li>
             <li>📈 A receita acumulada sobe a empresa de estágio: 🏚️ → 🚀 → 📈 → 🦄 → 🏢. Cada estágio libera placas novas — e sprints mais caóticas que pagam mais.</li>
           </ul>
           <h3>3 · Dicas de time</h3>
           <ul class="tips">
             <li>👯 <b>Pair programming</b>: 2 devs na mesma mesa = mais rápido e <b>sem bugs</b>.</li>
             <li>🙅 Ninguém revisa o próprio código. Combinem quem revisa!</li>
-            <li>🔥 <b>Combo</b>: entregas seguidas multiplicam os pontos até <b>x3</b>.</li>
-            <li>☕ Café deixa você mais rápido por alguns segundos.</li>
+            <li>🔥 <b>Combo</b>: entregas seguidas multiplicam os pontos até <b>x3</b>. 3 seguidas chamam o estagiário de graça!</li>
+            <li>🗑️ <b>Won't fix</b>: descartar custa pontos, mas <b>não</b> quebra o combo. Triagem é jogada válida.</li>
+            <li>☕ Café deixa você mais rápido — e <b>tira da reunião</b>.</li>
           </ul>
         </section>
         <section>
@@ -414,7 +456,8 @@ export class Screens {
           ${stageBar(c, c.valuation - e.payout)}
           ${e.stageUp != null ? `<div class="r-stageup">🎉 A empresa virou <b>${STAGES[e.stageUp].icon} ${STAGES[e.stageUp].name}</b>! Melhorias novas liberadas.</div>` : ''}
           ${e.record ? `<div class="r-rec new">🏆 NOVO RECORDE DA SPRINT!<small>${e.prevBest > 0 ? `superou ${e.prevBest} pts` : 'primeira vez nesta sprint'}</small></div>` : ''}
-          ${e.xp ? `<div class="r-xp">✨ +${e.xp} XP pra cada dev do time</div>` : ''}`;
+          ${e.xp ? `<div class="r-xp">✨ +${e.xp} XP pra cada dev do time</div>` : ''}
+          ${e.tease ? `<div class="r-tease">${e.tease}</div>` : ''}`;
         foot = next;
       }
     } else {
@@ -424,8 +467,7 @@ export class Screens {
           <div class="pc-title">${p.title}</div>
           <div class="pc-stats"><span>💻 ${p.stats.coded}</span><span>👀 ${p.stats.reviewed}</span><span>🔧 ${p.stats.fixed}</span><span>🔌 ${p.stats.repairs}</span><span>🔀 ${p.stats.delivered}</span><span>☕ ${p.stats.coffee}</span></div>
         </div>`).join('');
-      body = `<div class="r-kicker">PRÊMIOS DO TIME</div><div class="r-cards">${cards}</div>
-        ${r.economy?.tease ? `<div class="r-tease">${r.economy.tease}</div>` : ''}`;
+      body = `<div class="r-kicker">PRÊMIOS DO TIME</div><div class="r-cards">${cards}</div>`;
       foot = role === 'client'
         ? `<div class="foot-msg">⏳ Aguardando o host</div><button class="btn danger" data-nav="leave">${icon('exit', 18)} Sair da sala</button>`
         : `<button class="btn big" data-nav="again">${icon('restart', 18)} Jogar de novo</button><button class="btn primary big" data-nav="hq">${icon('building', 18)} Voltar ao HQ</button>`;

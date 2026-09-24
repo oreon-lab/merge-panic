@@ -4,6 +4,8 @@
 const ID_KEY = 'merge-panic:id';
 const PREF_KEY = 'merge-panic:prefs';
 const LEGACY_KEY = 'merge-panic:v1';
+const TELEM_KEY = 'merge-panic:sprints';
+const TELEM_MAX = 50;
 
 const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
 const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* segue em memória */ } };
@@ -31,4 +33,16 @@ const prefs = read(PREF_KEY) || { muted: read(LEGACY_KEY)?.muted || false };
 export const save = {
   get muted() { return !!prefs.muted; },
   set muted(v) { prefs.muted = !!v; write(PREF_KEY, prefs); },
+  // quebra-gelo: briefing visto + primeira entrega concluída (neste navegador)
+  get tutorialSeen() { return !!prefs.tutorialSeen; },
+  set tutorialSeen(v) { prefs.tutorialSeen = !!v; write(PREF_KEY, prefs); },
+  get tutorialDone() { return !!prefs.tutorialDone; },
+  set tutorialDone(v) { prefs.tutorialDone = !!v; write(PREF_KEY, prefs); },
+  // telemetria local de balanceamento: últimas sprints (placar, headcount, estrelas)
+  logSprint(e) {
+    const log = read(TELEM_KEY) || [];
+    log.push({ ...e, at: Date.now() });
+    write(TELEM_KEY, log.slice(-TELEM_MAX));
+  },
+  sprintLog() { return read(TELEM_KEY) || []; },
 };

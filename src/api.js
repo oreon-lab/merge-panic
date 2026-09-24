@@ -30,6 +30,6 @@ export const api = {
   rename: (name) => call('POST', '/api/profile', { name }),
   renameCompany: (name) => call('POST', '/api/company', { name }),
   buy: (id, extra = {}) => call('POST', '/api/buy', { id, ...extra }),
-  sprintStart: (players) => call('POST', '/api/sprint/start', { players }),
+  sprintStart: (players, n) => call('POST', '/api/sprint/start', { players, n }),
   sprintEnd: (payload) => call('POST', '/api/sprint/end', payload),
 };

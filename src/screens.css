@@ -102,8 +102,4 @@ button { font: inherit; color: inherit; cursor: pointer; border: 0; background: 
 .bigcount { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 180px; font-weight: 700; color: rgba(255, 90, 95, 0); pointer-events: none; }
 .bigcount.show { animation: bigPulse 0.9s ease-out forwards; }
 @keyframes bigPulse { 0% { transform: translate(-50%, -50%) scale(1.6); color: rgba(255,90,95,0.55); } 100% { transform: translate(-50%, -50%) scale(0.9); color: rgba(255,90,95,0); } }
-.room-chip { position: absolute; left: 12px; bottom: 12px; background: rgba(21,26,44,0.85); padding: 5px 12px; border-radius: 99px; font-size: 13px; }
-.room-chip b { font-family: 'JetBrains Mono', monospace; color: var(--yellow); letter-spacing: 2px; }
-.hud-help { position: absolute; right: 12px; bottom: 12px; font-size: 12px; opacity: 0.7; background: rgba(21,26,44,0.7); padding: 5px 10px; border-radius: 99px; }
-
 #ui.menu-bg .world-layer, #ui.menu-bg .toast { display: none; }

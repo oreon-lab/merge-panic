@@ -1,4 +1,3 @@
-import { icon } from './icons.js';
 const fmtMoneyUI = (v) => 'R$ ' + Math.round(v).toLocaleString('pt-BR');
 import * as THREE from 'three';
 import { STEPS } from './tickets.js';
@@ -23,32 +22,29 @@ export class UI {
     this.world = h('div', 'world-layer'); this.root.append(this.world);
     this.hud = h('div', 'hud hidden'); this.root.append(this.hud);
     this.orders = h('div', 'orders'); this.hud.append(this.orders);
+    // Topo enxuto: tempo + pontos/meta + UM multiplicador.
+    // Sem pill de Entregues (a fila já está nos cards), sem caixa (é do HQ),
+    // sem sala/ajuda (lobby/pausa), sem ícone no relógio (o número basta).
     this.stats = h('div', 'stats', `
-      <div class="clock"><span class="ic">${icon('clock', 26)}</span><span class="v">5:00</span></div>
+      <div class="clock"><span class="v">4:00</span></div>
       <div class="score">
         <div class="s-row"><span class="lbl">Pontos</span><span class="v">0</span></div>
         <div class="goal"><div class="gbar"><i class="gfill"></i></div><div class="gmk"></div></div>
       </div>
-      <div class="combo hidden"><span class="cx">x2</span><div class="ct"><i></i></div></div>
-      <div class="bonus hidden"><span class="bx">💛 x2</span><div class="bt"><i></i></div></div>
-      <div class="deliv"><span class="lbl">Entregues</span><span class="v">0/20</span></div>`);
+      <div class="mult hidden"><span class="mx">x2</span><div class="mt"><i></i></div></div>`);
     this.hud.append(this.stats);
     this.clockEl = this.stats.querySelector('.clock');
     this.scoreEl = this.stats.querySelector('.score .v');
-    this.delivEl = this.stats.querySelector('.deliv .v');
     this.goal = { fill: this.stats.querySelector('.gfill'), mk: this.stats.querySelector('.gmk') };
-    this.comboEl = this.stats.querySelector('.combo');
-    this.comboX = this.stats.querySelector('.combo .cx');
-    this.comboBar = this.stats.querySelector('.combo .ct i');
-    this.bonusEl = this.stats.querySelector('.bonus');
-    this.bonusX = this.stats.querySelector('.bonus .bx');
-    this.bonusBar = this.stats.querySelector('.bonus .bt i');
+    this.multEl = this.stats.querySelector('.mult');
+    this.multX = this.stats.querySelector('.mult .mx');
+    this.multBar = this.stats.querySelector('.mult .mt i');
     this.toastEl = h('div', 'toast'); this.root.append(this.toastEl);
     this.bannerEl = h('div', 'banner'); this.root.append(this.bannerEl);
     this.bigEl = h('div', 'bigcount'); this.root.append(this.bigEl);
-    this.roomEl = h('div', 'room-chip hidden'); this.hud.append(this.roomEl);
-    this.helpEl = h('div', 'hud-help', '<kbd>Esc</kbd> pausar · <kbd>M</kbd> som');
-    this.hud.append(this.helpEl);
+    this.coachEl = h('div', 'coach hidden'); this.hud.append(this.coachEl);
+    this.focusTypes = null; // estações que importam agora (destinos + âncoras)
+    this.playing = false;
     this.cards = new Map();
     this.labels = []; // { el, pos: Vector3 | () => Vector3 }
     this.badges = new Map();
@@ -78,10 +74,17 @@ export class UI {
     return !(a.x + a.w - m <= b.x || b.x + b.w - m <= a.x || a.y + a.h - m <= b.y || b.y + b.h - m <= a.y);
   }
 
+  // guia do estreante: barra de objetivo no topo (some quando completa)
+  setCoach(html) {
+    if (!html) { this.coachEl.classList.add('hidden'); return; }
+    this.coachEl.classList.remove('hidden');
+    if (this.coachEl.innerHTML !== html) this.coachEl.innerHTML = html;
+  }
+
   // painéis fixos do HUD, que os elementos de mundo não devem invadir
   hudRects() {
     const out = [];
-    for (const el of [this.orders, this.stats, this.helpEl, this.roomEl]) {
+    for (const el of [this.orders, this.stats, this.coachEl]) {
       if (!el || el.classList.contains('hidden')) continue;
       const r = el.getBoundingClientRect();
       if (r.width > 0 && r.height > 0) out.push({ x: r.x, y: r.y, w: r.width, h: r.height });
@@ -127,11 +130,31 @@ export class UI {
     }
   }
 
+  // barra de progresso do trabalho sobre a estação — só aparece enquanto há
+  // um ticket com progresso > 0 nela (some ao terminar/retirar, sem poluir)
+  updateWork(list) {
+    const seen = new Set();
+    for (const w of list) {
+      const key = w.st.index;
+      seen.add(key);
+      let el = this.workbars.get(key);
+      if (!el) {
+        el = h('div', 'workbar', '<div></div>');
+        this.world.append(el);
+        this.workbars.set(key, el);
+      }
+      el.firstChild.style.width = `${Math.min(100, w.prog * 100)}%`;
+      this.put(el, w.st.pos.clone().add(new THREE.Vector3(0, 1.15, 0)), 4);
+    }
+    for (const [k, el] of this.workbars) if (!seen.has(k)) { el.remove(); this.workbars.delete(k); }
+  }
+
   clearWorld() {
     this.world.innerHTML = '';
     this.labels = [];
     this.badges.clear();
     this.alerts = new Map();
+    this.workbars = new Map();
     this.bubbles = new Map();
     this.tags = new Map();
     this.prompts = new Map();
@@ -158,14 +181,16 @@ export class UI {
       if (t.innerHTML !== html) t.innerHTML = html;
       el.classList.toggle('bad', !!a.bad);
       const bp = el.lastChild;
-      bp.style.display = a.prog ? 'block' : 'none';
-      if (a.prog) bp.firstChild.style.width = `${Math.min(100, a.prog * 100)}%`;
+      bp.style.display = a.prog != null ? 'block' : 'none';
+      if (a.prog != null) bp.firstChild.style.width = `${Math.min(100, a.prog * 100)}%`;
       this.put(el, a.st.pos.clone().add(new THREE.Vector3(0, a.st.type === 'server' ? 2.3 : 1.9, 0)), 5);
     }
     for (const [k, el] of this.alerts) if (!seen.has(k)) { el.remove(); this.alerts.delete(k); }
   }
 
-  // balões sobre os jogadores (reunião)
+  // Na sprint, nome sobre a cabeça o tempo todo é ruído (a cor já identifica).
+  // Só aparece quem está em reunião — com o nome dentro do balão.
+  // No lobby, mantém as etiquetas (é ali que se monta o time).
   updatePlayers(players, myId = 0, online = false) {
     for (const p of players) {
       let tag = this.tags.get(p.index);
@@ -175,8 +200,13 @@ export class UI {
         this.world.append(tag);
         this.tags.set(p.index, tag);
       }
-      tag.style.opacity = p.meeting > 0 ? 0 : 1;
-      this.place(tag, p.pos.clone().add(new THREE.Vector3(0, 1.85, 0)));
+      // sprint: tag some (a cor identifica; reunião usa o balão com nome)
+      if (this.playing) { tag.style.display = 'none'; }
+      else {
+        tag.style.display = '';
+        tag.style.opacity = p.meeting > 0 ? 0 : 1;
+        this.place(tag, p.pos.clone().add(new THREE.Vector3(0, 1.85, 0)));
+      }
 
       let el = this.bubbles.get(p.index);
       const show = p.meeting > 0;
@@ -186,7 +216,7 @@ export class UI {
         this.world.append(el);
         this.bubbles.set(p.index, el);
       }
-      const txt = `📅 Em reunião... ${Math.ceil(p.meeting)}s`;
+      const txt = `📅 ${p.look.name} em reunião ${Math.ceil(p.meeting)}s`;
       if (el.textContent !== txt) el.textContent = txt;
       this.place(el, p.pos.clone().add(new THREE.Vector3(0, 1.6, 0)));
     }
@@ -197,15 +227,18 @@ export class UI {
     const info = STATION_INFO[st.type];
     if (!info) return;
     const el = h('div', `slabel s-${st.type}`, `<span>${info.icon}</span>${info.label}`);
+    el.dataset.st = st.type;
     this.world.append(el);
     this.labels.push({ el, pos: st.pos.clone().add(new THREE.Vector3(0, 1.45, 0)) });
   }
 
   // ---------- badges de ticket ----------
+  // Só o ícone do passo atual. Sem barra de progresso: o flash da estação,
+  // o som de digitação e o timer do card já contam a mesma história.
   badgeFor(t) {
     let b = this.badges.get(t.id);
     if (!b) {
-      b = h('div', `badge t-${t.type}`, `<span class="bi"></span><div class="bp"><div></div></div>`);
+      b = h('div', `badge t-${t.type}`, `<span class="bi"></span>`);
       this.world.append(b);
       this.badges.set(t.id, b);
     }
@@ -216,8 +249,19 @@ export class UI {
     if (b) { b.remove(); this.badges.delete(t.id); }
   }
 
+  // fluxo certo: só Backlog, Merge e os próximos passos ficam com etiqueta.
+  // O resto some durante a sprint pra não brigar com alertas e prompts.
+  setFocus(types) { this.focusTypes = types; }
+
   updateWorld(tickets) {
-    for (const l of this.labels) this.put(l.el, l.pos, 3, 0, true);
+    for (const l of this.labels) {
+      const t = l.el.dataset.st;
+      const show = !this.playing || !this.focusTypes || this.focusTypes.has(t);
+      l.el.style.display = show ? '' : 'none';
+      if (!show) continue;
+      l.el.classList.toggle('anchor', t === 'backlog' || t === 'merge');
+      this.put(l.el, l.pos, 3, 0, true);
+    }
     const tmp = new THREE.Vector3();
     for (const t of tickets) {
       if (t.state !== 'active' || !t.mesh) continue;
@@ -226,20 +270,21 @@ export class UI {
       tmp.y += 0.35;
       this.put(b, tmp, 0);
       const sd = t.stepDef;
-      const icon = t.conflict ? '⚔️' : sd ? sd.icon : '✅';
+      const ic = t.conflict ? '⚔️' : sd ? sd.icon : '✅';
       const bi = b.firstChild;
-      if (bi.textContent !== icon) bi.textContent = icon;
-      const bp = b.lastChild;
-      bp.style.display = t.progress > 0 ? 'block' : 'none';
-      bp.firstChild.style.width = `${Math.min(100, t.progress * 100)}%`;
+      if (bi.textContent !== ic) bi.textContent = ic;
       b.classList.toggle('urgent', t.timeLeft < 20);
     }
   }
 
   // ---------- cards de pedido ----------
+  // Card mínimo: cor do tipo + etapas + prazo. Sem nome (flavor), sem pontos
+  // (só importam na entrega), sem "onde levar" (a ▼ + o badge já dizem).
+  // O ticket na mão ganha destaque (.focused); a fila apaga (.dim).
   syncOrders(tickets, players) {
-    const live = tickets.filter((t) => t.state === 'waiting' || t.state === 'active');
+    const live = tickets.filter((t) => t.state === 'waiting' || t.state === 'active').slice(0, 5);
     const ids = new Set(live.map((t) => t.id));
+    const anyHeld = live.some((t) => t.state === 'active' && t.holder?.kind === 'player');
     for (const [id, c] of this.cards) {
       if (!ids.has(id)) {
         const t = tickets.find((x) => x.id === id);
@@ -252,11 +297,10 @@ export class UI {
       let c = this.cards.get(t.id);
       if (!c) {
         c = h('div', `card t-${t.type}`);
+        c.title = `${t.def.icon} ${t.def.label} · ${t.name}`;
         c.innerHTML = `
-          <div class="c-head"><span class="c-ic">${t.def.icon}</span><span class="c-type">${t.def.label}</span><span class="c-pts">${t.def.points}</span></div>
-          <div class="c-name">${t.name}</div>
+          <div class="c-head"><span class="c-ic">${t.def.icon}</span></div>
           <div class="c-steps"></div>
-          <div class="c-who"></div>
           <div class="c-timer"><div></div></div>`;
         this.orders.append(c);
         this.cards.set(t.id, c);
@@ -272,19 +316,9 @@ export class UI {
         e.classList.toggle('done', i < t.stepIndex);
         e.classList.toggle('cur', i === t.stepIndex && t.state === 'active');
       });
-      let who = '📋 no backlog';
-      if (t.state === 'active') {
-        if (t.holder?.kind === 'player') {
-          const p = t.holder.ref;
-          who = `<b style="color:${p.color}">● ${p.look.name}</b> carregando`;
-        } else if (t.holder?.kind === 'station') {
-          const info = STATION_INFO[t.holder.ref.type];
-          who = info ? `${info.icon} em ${info.label}` : '📥 na bancada';
-        }
-        who += ` · próx: <b>${t.stepDef.label}</b>`;
-      }
-      const whoEl = c.querySelector('.c-who');
-      if (whoEl.innerHTML !== who) whoEl.innerHTML = who;
+      const held = t.state === 'active' && t.holder?.kind === 'player';
+      c.classList.toggle('focused', !!held);
+      c.classList.toggle('dim', !held && anyHeld && t.state === 'waiting');
       const frac = t.timeLeft / t.timeLimit;
       const bar = c.querySelector('.c-timer div');
       bar.style.width = `${frac * 100}%`;
@@ -294,7 +328,8 @@ export class UI {
   }
 
   // opts: { stars: limiares do nível, combo: {mult,t,window}, bonus: {text,t,window} }
-  setStats(time, score, delivered, max, { stars = [], combo = null, bonus = null } = {}) {
+  // Uma pill de multiplicador: bônus temporário tem prioridade, senão combo.
+  setStats(time, score, { stars = [], combo = null, bonus = null } = {}) {
     this.clockEl.querySelector('.v').textContent = fmtTime(time);
     this.clockEl.classList.toggle('low', time <= 30);
     if (this.scoreEl.textContent !== String(score)) {
@@ -303,7 +338,6 @@ export class UI {
       void this.scoreEl.offsetWidth;
       this.scoreEl.classList.add('bump');
     }
-    this.delivEl.textContent = `${delivered}/${max}`;
 
     const top = stars[stars.length - 1] || 1;
     const key = stars.join(',');
@@ -321,21 +355,22 @@ export class UI {
     });
 
     const hot = combo && combo.mult > 1;
-    this.comboEl.classList.toggle('hidden', !hot);
-    if (hot) {
-      this.comboEl.dataset.mult = combo.mult;
-      this.comboX.textContent = `x${combo.mult}`;
-      this.comboBar.style.width = `${Math.max(0, Math.min(100, (combo.t / combo.window) * 100))}%`;
-    }
-
-    this.bonusEl.classList.toggle('hidden', !bonus);
-    if (bonus) {
-      if (this.bonusX.textContent !== bonus.text) this.bonusX.textContent = bonus.text;
-      this.bonusBar.style.width = `${Math.max(0, Math.min(100, (bonus.t / bonus.window) * 100))}%`;
+    const m = bonus ? { text: bonus.text, t: bonus.t, window: bonus.window }
+      : hot ? { text: `🔥 x${combo.mult}`, t: combo.t, window: combo.window } : null;
+    this.multEl.classList.toggle('hidden', !m);
+    if (m) {
+      if (this.multX.textContent !== m.text) this.multX.textContent = m.text;
+      this.multBar.style.width = `${Math.max(0, Math.min(100, (m.t / m.window) * 100))}%`;
     }
   }
 
   showHud(v) { this.hud.classList.toggle('hidden', !v); }
+  // modo sprint: ativa o filtro de etiquetas do mundo.
+  setPlaying(v) {
+    this.playing = !!v;
+    this.root.classList.toggle('playing', !!v);
+    if (!v) this.setFocus(null);
+  }
 
   // ---------- feedback ----------
   floatText(text, pos, color = '#fff', big = false) {
@@ -409,8 +444,9 @@ export class UI {
     this.bigEl.classList.add('show');
   }
 
-  // etiquetas das placas de compra (nome + preço, verde se dá pra comprar)
-  updatePads(pads, show, near = []) {
+  // etiquetas das placas de compra: no lobby mostra tudo (é hora de comprar);
+  // na sprint mostra SÓ a placa sob o pé, pra não poluir o fluxo do ticket.
+  updatePads(pads, show, near = [], playing = false) {
     const seen = new Set();
     // etiqueta completa só na placa mais próxima de cada jogador (evita etiquetas empilhadas)
     const closest = new Set();
@@ -427,7 +463,8 @@ export class UI {
       if (!pad.visible) continue;
       // perto de alguém: etiqueta completa; longe: só as compráveis, em versão compacta
       const close = closest.has(pad);
-      if (!close && !pad.affordable) continue;
+      if (playing) { if (!close) continue; }
+      else if (!close && !pad.affordable) continue;
       seen.add(pad.id);
       let el = this.padEls.get(pad.id);
       if (!el) {
@@ -448,26 +485,4 @@ export class UI {
     for (const [k, el] of this.padEls) if (!seen.has(k)) { el.remove(); this.padEls.delete(k); }
   }
 
-  // caixa da empresa ao vivo durante a sprint
-  setCash(v, show) {
-    if (!this.cashEl) {
-      this.cashEl = h('div', 'cash-hud');
-      this.stats.prepend(this.cashEl);
-    }
-    this.cashEl.classList.toggle('hidden', !show);
-    const r = Math.round(v);
-    if (r === this.lastCash) return;
-    if (this.lastCash != null && r > this.lastCash) {
-      this.cashEl.classList.remove('bump');
-      void this.cashEl.offsetWidth;
-      this.cashEl.classList.add('bump');
-    }
-    this.lastCash = r;
-    this.cashEl.innerHTML = `<span class="lbl">Caixa</span><span class="v ${r < 0 ? 'neg' : ''}">${fmtMoneyUI(r)}</span>`;
-  }
-
-  setRoom(code) {
-    this.roomEl.classList.toggle('hidden', !code);
-    this.roomEl.innerHTML = code ? `🌐 Sala <b>${code}</b>` : '';
-  }
 }

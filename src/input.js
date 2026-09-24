@@ -62,7 +62,7 @@ export class Input {
   onMove(e) {
     this.pt.x = e.clientX; this.pt.y = e.clientY;
     this.pt.inside = true;
-    this.refreshAim();
+    if (!this.pt.left) this.refreshAim();
   }
   onDown(e) {
     this.pt.x = e.clientX; this.pt.y = e.clientY;

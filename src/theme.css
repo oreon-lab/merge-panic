@@ -150,7 +150,12 @@ code.acct { background: #fff; color: var(--ink); border: 3px solid var(--ink); }
 .tm small { color: var(--muted); padding: 4px 10px 0; font-weight: 600; }
 .tm.empty { background: rgba(44,47,94,0.8); border: 4px dashed rgba(255,255,255,0.4); box-shadow: none; padding: 8px; }
 .tm.empty b { font-family: var(--game); color: rgba(255,255,255,0.65); font-size: 20px; }
-.tm.empty small { color: #fff; }
+/* vaga ativa: PRESS TO JOIN arcade com os botões de cada controle */
+.tm.empty.next { border: 4px solid var(--yellow); background: rgba(60,50,20,0.92); box-shadow: 0 6px 0 var(--ink), 0 0 22px rgba(255,209,102,0.45); align-items: stretch; text-align: center; animation: joinGlow 1.2s ease-in-out infinite; }
+.tm.empty.next b { color: var(--yellow); font-size: 19px; -webkit-text-stroke: 0; }
+.join-keys { display: flex; flex-wrap: wrap; gap: 4px 8px; justify-content: center; padding: 4px 2px 0; font-size: 12px; font-weight: 700; color: #fff; }
+.join-keys span { display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.35); border-radius: 99px; padding: 2px 8px 2px 2px; }
+@keyframes joinGlow { 50% { transform: scale(1.03); box-shadow: 0 6px 0 var(--ink), 0 0 32px rgba(255,209,102,0.7); } }
 
 /* dock: botões redondos + JOGAR gigante */
 .dock { background: var(--panel); border: 4px solid var(--ink); border-radius: 26px; box-shadow: 0 8px 0 var(--ink); padding: 8px 14px; gap: 12px; align-items: center; backdrop-filter: none; }
@@ -169,7 +174,7 @@ code.acct { background: #fff; color: var(--ink); border: 3px solid var(--ink); }
 .dk.play.focus { box-shadow: 0 7px 0 var(--ink), 0 0 0 5px #fff; }
 .dk.play.dim { background: linear-gradient(180deg, #9296c2, #6b6f9c); animation: none; }
 @keyframes playPulse { 50% { transform: scale(1.05); } }
-.dock-hint { background: rgba(22,20,43,0.8); border: 0; color: #fff; font-weight: 600; border-radius: 99px; padding: 4px 14px; backdrop-filter: none; }
+
 .hq.dock-focus .dock { box-shadow: 0 8px 0 var(--ink), 0 0 0 4px var(--yellow); }
 
 /* ---------- sala online ---------- */
@@ -228,6 +233,7 @@ code.acct { background: #fff; color: var(--ink); border: 3px solid var(--ink); }
 .slabel { z-index: 1; }
 .padlbl { z-index: 2; }
 .badge { z-index: 3; }
+.workbar { z-index: 4; }
 .guide { z-index: 4; }
 .alert { z-index: 5; }
 .ptag { z-index: 6; }
@@ -238,18 +244,13 @@ code.acct { background: #fff; color: var(--ink); border: 3px solid var(--ink); }
 .card { background: var(--paper); border: 4px solid var(--ink); border-radius: 14px; box-shadow: 0 6px 0 var(--ink); overflow: visible; font-family: var(--body); position: relative; }
 .card::before { content: ''; position: absolute; top: -11px; left: 50%; width: 46px; height: 16px; margin-left: -23px; background: rgba(255, 230, 150, 0.9);
   border: 2px solid rgba(22,20,43,0.3); transform: rotate(-4deg); z-index: 2; }
-.card .c-head { background: var(--tc); color: #fff; border: 0; border-bottom: 3px solid var(--ink); border-radius: 10px 10px 0 0; padding: 4px 10px; }
-.card .c-type { color: #fff; font-family: var(--game); font-weight: 400; font-size: 14px; letter-spacing: 1px; -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill; }
-.card .c-pts { background: #fff; color: var(--ink); border: 2px solid var(--ink); font-family: var(--game); font-weight: 400; }
-.card .c-name { color: var(--ink); font-weight: 700; }
+.card .c-head { background: var(--tc); color: #fff; border: 0; border-bottom: 3px solid var(--ink); border-radius: 10px 10px 0 0; padding: 2px 10px; }
 .card .st { background: #fff; border: 2px solid var(--ink); }
 .card .st.cur { background: var(--yellow); box-shadow: 0 0 0 3px #fff, 0 0 0 5px var(--ink); }
 .card .st.done { background: #b8f2c4; }
-.card .c-who { color: #5b5f8a; font-weight: 600; }
 .card .c-timer { height: 10px; margin: 0 8px 8px; border: 2px solid var(--ink); border-radius: 99px; background: #e2dccd; overflow: hidden; }
 .stats > div { background: var(--panel); border: 4px solid var(--ink); border-radius: 18px; box-shadow: 0 6px 0 var(--ink); backdrop-filter: none; }
-.stats .clock { border-radius: 99px; padding: 6px 18px 6px 8px; }
-.stats .clock .ic { width: 44px; height: 44px; display: grid; place-items: center; background: var(--yellow); color: var(--ink); border: 3px solid var(--ink); border-radius: 50%; }
+.stats .clock { border-radius: 99px; padding: 6px 18px; }
 .stats .clock .v { font-size: 40px; -webkit-text-stroke: 7px var(--ink); paint-order: stroke fill; }
 .stats .clock.low { background: var(--red); }
 .stats .lbl { font-family: var(--game); font-weight: 400; color: var(--muted); letter-spacing: 1px; }
@@ -258,7 +259,6 @@ code.acct { background: #fff; color: var(--ink); border: 3px solid var(--ink); }
 .goal .gbar { border: 2px solid var(--ink); background: var(--panel-3); }
 .slabel { font-family: var(--game); font-weight: 400; font-size: 12px; background: var(--panel); border: 2px solid var(--ink); color: #fff; box-shadow: 0 3px 0 var(--ink); backdrop-filter: none; }
 .toast { background: var(--paper); color: var(--ink); border: 4px solid var(--ink); box-shadow: 0 6px 0 var(--ink); font-weight: 600; backdrop-filter: none; }
-.hud-help, .room-chip { background: var(--panel); border: 3px solid var(--ink); color: #fff; box-shadow: 0 4px 0 var(--ink); font-weight: 600; }
 .prompt span { font-family: var(--game); font-weight: 400; background: #fff; color: var(--ink); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); font-size: 14px; }
 .prompt kbd { background: var(--c); color: #fff; }
 .ptag { font-family: var(--game); font-weight: 400; font-size: 13px; border: 2px solid var(--ink); box-shadow: 0 2px 0 var(--ink); }
@@ -267,6 +267,8 @@ code.acct { background: #fff; color: var(--ink); border: 3px solid var(--ink); }
 .banner .b-main { font-family: var(--game); -webkit-text-stroke: 12px var(--ink); paint-order: stroke fill; text-shadow: 0 10px 0 var(--ink); }
 .banner .b-sub { font-family: var(--game); -webkit-text-stroke: 6px var(--ink); paint-order: stroke fill; }
 .alert .a-t { font-family: var(--game); font-weight: 400; border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); }
+.workbar { border: 2px solid var(--ink); box-shadow: 0 3px 0 var(--ink); background: var(--panel-3); }
+.workbar div { background: linear-gradient(90deg, #6ee7a0, #ffd166); }
 .bubble { border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); font-weight: 700; }
 
 /* ---------- tycoon: placas de compra ---------- */
@@ -283,9 +285,14 @@ code.acct { background: #fff; color: var(--ink); border: 3px solid var(--ink); }
 .padlbl.mini i { font-style: normal; font-size: 15px; }
 .padlbl.mini span { font-size: 15px; }
 @keyframes padBob { 50% { translate: 0 -5px; } }
-.stats .cash-hud { flex-direction: column; align-items: flex-end; gap: 0; padding: 6px 16px; }
-.stats .cash-hud .v { color: var(--yellow); font-size: 28px; }
-.stats .cash-hud .v.neg { color: var(--red); }
-.stats .cash-hud.bump .v { animation: scoreBump 0.34s cubic-bezier(.2, 1.8, .4, 1); }
-@keyframes scoreBump { 40% { transform: scale(1.3); } }
 .hq-cash b.neg { color: var(--red); }
+
+/* ---------- quebra-gelo ---------- */
+.coach { background: var(--paper); color: var(--ink); border: 3px solid var(--ink); box-shadow: 0 5px 0 var(--ink); font-weight: 600; }
+.coach .cstep { background: var(--ink); color: var(--yellow); font-family: var(--game); font-weight: 400; }
+.coach kbd { margin: 0 1px; }
+.bfs, .bctl { background: var(--panel-3); border: 3px solid var(--ink); border-radius: 16px; box-shadow: 0 4px 0 var(--ink); }
+.bfs b { font-family: var(--game); font-weight: 400; font-size: 16px; }
+.bgoal { font-weight: 600; }
+.bgoal b { color: var(--yellow); }
+.hq-tip .step { border: 2px solid var(--ink); box-shadow: 0 2px 0 var(--ink); font-family: var(--game); font-weight: 400; }

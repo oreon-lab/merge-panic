@@ -27,7 +27,7 @@
 .back.focus, .back:hover { background: var(--yellow); color: #1c2033; }
 
 /* ---------- moldura dos painéis ---------- */
-.s-sprints, .s-room, .s-help, .s-settings { background: rgba(12, 15, 28, 0.55); backdrop-filter: blur(3px); }
+.s-sprints, .s-room, .s-help, .s-settings, .s-brief { background: rgba(12, 15, 28, 0.55); backdrop-filter: blur(3px); }
 .s-shop { justify-content: flex-end; background: linear-gradient(90deg, transparent 45%, rgba(12, 15, 28, 0.55)); }
 .pnl { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 32px); display: flex; flex-direction: column; background: rgba(21, 26, 44, 0.97);
   border: 2px solid var(--line); border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); animation: popIn 0.28s cubic-bezier(.2,1.4,.4,1); overflow: hidden; }
@@ -80,8 +80,19 @@
 .hq-room b { font-family: 'JetBrains Mono', monospace; color: var(--yellow); letter-spacing: 3px; font-size: 16px; }
 .hq-room small { opacity: 0.7; }
 .hq-room.focus { outline: 3px solid #fff; }
-.hq-tip { position: absolute; top: 96px; left: 50%; transform: translateX(-50%); background: rgba(21,26,44,0.88); border-radius: 99px; padding: 7px 16px; font-size: 14px; white-space: nowrap;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.3); max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; animation: popIn 0.3s ease; }
+.hq-tip { position: absolute; top: 96px; left: 50%; transform: translateX(-50%); display: grid; grid-template-columns: auto minmax(280px, 340px); align-items: center; gap: 14px;
+  background: rgba(21,26,44,0.88); border-radius: 18px; padding: 8px 14px; font-size: 14px; white-space: nowrap; max-width: min(900px, calc(100vw - 32px));
+  overflow: hidden; animation: popIn 0.3s ease; }
+.hq-step { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hq-goal { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; border-left: 3px dashed rgba(22,20,43,0.35); padding-left: 14px; }
+.hq-goal-label { grid-column: 1; font-size: 10px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; opacity: 0.65; }
+.hq-goal b { grid-column: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hq-goal small { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.hq-goal-track { grid-column: 1 / -1; height: 5px; margin-top: 2px; overflow: hidden; background: rgba(22,20,43,0.2); border-radius: 99px; }
+.hq-goal-track i { display: block; height: 100%; background: var(--yellow-d); border-radius: inherit; transition: width 0.5s ease; }
+.hq-goal.ready { border-left-color: var(--green-d); }
+.hq-goal.ready small { color: var(--green-d); }
+.hq-goal.ready .hq-goal-track i { background: var(--green-d); }
 .hq-bottom { position: absolute; left: 14px; right: 14px; bottom: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
 .hq-bottom > * { pointer-events: auto; }
 .team { display: grid; grid-template-columns: repeat(4, minmax(0, 190px)); gap: 8px; }
@@ -104,14 +115,15 @@
 .dk.play small { font-weight: 400; font-size: 11px; opacity: 0.85; }
 .dk.play.dim { background: #3a4260; box-shadow: 0 5px 0 #262c44; animation: none; }
 .badge-dot { position: absolute; top: 2px; right: 10px; background: #ff4d5e; color: #fff; font-style: normal; font-size: 11px; font-weight: 700; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; animation: pulse2 1s infinite; }
-.dock-hint { font-size: 12px; opacity: 0.65; background: rgba(21,26,44,0.6); padding: 3px 10px; border-radius: 99px; }
 .hq.dock-focus .dock { border-color: var(--yellow); }
 @keyframes pulse2 { 50% { transform: scale(1.04); } }
 @media (max-width: 800px) {
   .team { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
   .dk { min-width: 56px; font-size: 11px; }
   .dk.play { min-width: 96px; }
-  .hq-tip { top: auto; bottom: 250px; font-size: 12px; }
+  .hq-tip { top: auto; bottom: 250px; grid-template-columns: 1fr; width: calc(100vw - 28px); max-width: none; font-size: 12px; }
+  .hq-step { text-align: center; }
+  .hq-goal { border-left: 0; border-top: 3px dashed rgba(22,20,43,0.35); padding: 7px 0 0; }
 }
 
 /* ---------- mapa de sprints ---------- */

@@ -1,5 +1,21 @@
 // Utilitários de teste (só em modo dev): simulam teclas e avançam o jogo sem rAF.
 import * as THREE from 'three';
+import { save } from './save.js';
+
+// resumo por headcount pra calibrar estrelas com dados reais, não palpite
+function telemSummary() {
+  const log = save.sprintLog();
+  const by = {};
+  for (const e of log) {
+    const b = (by[e.players] ||= { n: 0, score: 0, stars: 0, delivered: 0 });
+    b.n++; b.score += e.score || 0; b.stars += e.stars || 0; b.delivered += e.delivered || 0;
+  }
+  return Object.fromEntries(Object.entries(by).map(([k, b]) => [k + 'P', {
+    sprints: b.n, scoreMedio: Math.round(b.score / b.n),
+    estrelasMedias: Math.round((b.stars / b.n) * 10) / 10,
+    entreguesMedias: Math.round((b.delivered / b.n) * 10) / 10,
+  }]));
+}
 
 export function installDebug(app) {
   const kd = (c) => window.dispatchEvent(new KeyboardEvent('keydown', { code: c }));
@@ -30,5 +46,5 @@ export function installDebug(app) {
     app.resize();
     app.render();
   };
-  window.dbg = { kd, ku, tap, S, goTo, closeup, restore, THREE, app };
+  window.dbg = { kd, ku, tap, S, goTo, closeup, restore, THREE, app, telemSummary };
 }

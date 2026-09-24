@@ -143,12 +143,15 @@ const routes = {
   'POST /api/sprint/start'(req, body) {
     const p = auth(req);
     const c = companyOf(p);
-    const params = sprintParams(c); // dificuldade vem do estágio da empresa
+    const players = [...new Set((body.players || []).filter((x) => typeof x === 'string' && db().profiles[x]))].slice(0, 4);
+    const reported = clampInt(body.n, 1, 4);
+    const localRoster = players.length <= 1 && (!players[0] || players[0] === p.id);
+    const n = localRoster ? reported : Math.min(reported, players.length + 1);
+    const params = sprintParams(c, n); // dificuldade vem do estágio + headcount
     const now = Date.now();
     for (const [k, s] of sprints) if (now - s.startedAt > SPRINT_TTL) sprints.delete(k);
-    const players = [...new Set((body.players || []).filter((x) => typeof x === 'string' && db().profiles[x]))].slice(0, 4);
     const sprintId = newId('s_');
-    sprints.set(sprintId, { companyId: c.id, hostId: p.id, params: { stage: params.stage, stars: params.stars, maxOrders: params.maxOrders }, startedAt: now, players });
+    sprints.set(sprintId, { companyId: c.id, hostId: p.id, params: { stage: params.stage, stars: params.stars, maxOrders: params.maxOrders, bonusScale: params.bonusScale }, startedAt: now, players });
     return { sprintId, sprintNo: params.sprintNo };
   },
 
@@ -166,7 +169,7 @@ const routes = {
     const delivered = clampInt(body.delivered, 0, lv.maxOrders * 3);
     const failed = clampInt(body.failed, 0, lv.maxOrders * 3);
     const combo = clampInt(body.combo, 0, 200);
-    const payout = payoutOf(lv.stage, score, stars);
+    const payout = payoutOf(lv.stage, score, stars, lv.bonusScale);
 
     const d = db();
     const c = d.companies[s.companyId];

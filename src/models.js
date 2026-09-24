@@ -5,6 +5,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 export const COUNTER_H = 0.72;
 
 const matCache = new Map();
+const outlineMat = new THREE.MeshBasicMaterial({ color: '#16142b', side: THREE.BackSide, toneMapped: false });
 export function mat(color, opts = {}) {
   const key = color + JSON.stringify(opts);
   if (!matCache.has(key)) {
@@ -23,6 +24,18 @@ export function mesh(geo, material, x = 0, y = 0, z = 0, shadow = true) {
   m.castShadow = shadow;
   m.receiveShadow = true;
   return m;
+}
+
+function addOutline(part) {
+  if (part.userData.outline) return;
+  part.geometry.computeBoundingSphere();
+  if ((part.geometry.boundingSphere?.radius || 0) < 0.055) return;
+  const shell = new THREE.Mesh(part.geometry, outlineMat);
+  shell.userData.outline = true;
+  shell.scale.setScalar(1.035);
+  shell.castShadow = false;
+  shell.receiveShadow = false;
+  part.add(shell);
 }
 
 // ---------- Texturas em canvas ----------
@@ -358,7 +371,8 @@ export function buildDev({ hoodie, skin, hair, style, pants = '#34405c', accent 
   }
   const torso = new THREE.Group(); torso.position.y = 0.3; body.add(torso);
   torso.add(mesh(rbox(0.38, 0.34, 0.27, 0.11), hoodM, 0, 0.18, 0));
-  torso.add(mesh(rbox(0.22, 0.08, 0.02, 0.01), hoodD, 0, 0.1, 0.135, false));
+  torso.add(mesh(rbox(0.24, 0.11, 0.025, 0.04), hoodD, 0, 0.12, 0.137, false));
+  torso.add(mesh(rbox(0.24, 0.045, 0.02, 0.012), mat(accent || hoodie), 0, 0.25, -0.137, false));
   for (const s of [-1, 1]) torso.add(mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.1, 5), mat('#f5f5f5'), 0.05 * s, 0.26, 0.14, false));
   const hood = mesh(new THREE.TorusGeometry(0.12, 0.05, 8, 16), hoodD, 0, 0.35, -0.06);
   hood.rotation.x = Math.PI / 2 - 0.3;
@@ -368,6 +382,7 @@ export function buildDev({ hoodie, skin, hair, style, pants = '#34405c', accent 
   for (const s of [-1, 1]) {
     const sh = new THREE.Group(); sh.position.set(0.215 * s, 0.31, 0); torso.add(sh);
     sh.add(mesh(new THREE.CapsuleGeometry(0.058, 0.13, 4, 8), hoodM, 0, -0.1, 0));
+    sh.add(mesh(new THREE.CylinderGeometry(0.061, 0.061, 0.035, 10), hoodD, 0, -0.175, 0));
     sh.add(mesh(new THREE.SphereGeometry(0.058, 10, 8), skinM, 0, -0.21, 0));
     sh.rotation.z = 0.12 * s;
     arms.push(sh);
@@ -379,6 +394,7 @@ export function buildDev({ hoodie, skin, hair, style, pants = '#34405c', accent 
   head.add(skull);
   // orelhas
   for (const s of [-1, 1]) head.add(mesh(new THREE.SphereGeometry(0.05, 8, 8), skinM, 0.245 * s, -0.01, 0));
+  head.add(mesh(new THREE.SphereGeometry(0.035, 10, 8), skinM, 0, -0.025, 0.238));
   // olhos
   const eyes = [];
   const eyeM = mat('#1b1b24', { roughness: 0.3 });
@@ -450,7 +466,7 @@ export function buildDev({ hoodie, skin, hair, style, pants = '#34405c', accent 
   hold.position.set(0, 0.2, 0.34);
   torso.add(hold);
 
-  root.traverse((o) => { if (o.isMesh) { o.castShadow = true; } });
+  root.traverse((o) => { if (o.isMesh && !o.userData.outline) { o.castShadow = true; addOutline(o); } });
   return { root, body, torso, head, legs, arms, eyes, brows, mouth, hold };
 }
 
